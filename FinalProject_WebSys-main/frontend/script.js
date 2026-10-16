@@ -1,0 +1,5977 @@
+const STORAGE = {
+
+
+users: "resource_users_v2",
+
+listings: "resource_listings_v2",
+
+messages: "resource_messages_v2",
+
+drafts: "resource_drafts_v2",
+
+saved: "resource_saved_v2",
+
+cart: "resource_cart_v2",
+
+purchases: "resource_purchases_v2",
+
+session: "resource_session_v2"
+
+
+};
+
+const FALLBACK_IMAGE =
+"https://images.unsplash.com/photo-1503602642458-232111445657?w=900&auto=format&fit=crop&q=80";
+function mediaUrl(path) {
+    return typeof path === "string" && path.startsWith("uploads/")
+        ? `../backend/${path}`
+        : path;
+}
+
+const $ = (selector, parent = document) =>
+parent.querySelector(selector);
+
+const $$ = (selector, parent = document) =>
+[...parent.querySelectorAll(selector)];
+
+function readStorage(key, fallback) {
+
+
+try {
+
+    const raw = localStorage.getItem(key);
+
+    return raw ? JSON.parse(raw) : fallback;
+
+} catch {
+
+    return fallback;
+
+}
+
+
+}
+
+function writeStorage(key, value) {
+
+
+localStorage.setItem(
+    key,
+    JSON.stringify(value)
+);
+
+
+}
+
+function createId(prefix = "id") {
+
+
+return `${prefix}_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+
+
+}
+
+function getUsers() {
+return readStorage(STORAGE.users, []);
+}
+
+function getListings() {
+return readStorage(STORAGE.listings, []);
+}
+
+function getMessages() {
+return readStorage(STORAGE.messages, []);
+}
+
+function getSaved() {
+return readStorage(STORAGE.saved, []);
+}
+
+function getCart() {
+return readStorage(STORAGE.cart, []);
+}
+
+function getPurchases() {
+return readStorage(STORAGE.purchases, []);
+}
+
+function getCurrentUserId() {
+return localStorage.getItem(STORAGE.session);
+}
+
+function getCurrentUser() {
+
+
+const id = getCurrentUserId();
+
+if (!id) return null;
+
+return getUsers().find(
+    user => user.id === id
+) || null;
+
+
+}
+
+function saveUsers(users) {
+writeStorage(STORAGE.users, users);
+}
+
+function saveListings(listings) {
+writeStorage(STORAGE.listings, listings);
+}
+
+async function syncRemoteListings() {
+    try {
+        const response = await fetch("../backend/php/listings/get.php", {
+            cache: "no-store",
+            headers: { Accept: "application/json" }
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success || !Array.isArray(result.listings)) return;
+
+        const remoteListings = result.listings.map(listing => ({
+            ...listing,
+            id: String(listing.id),
+            sellerId: String(listing.sellerId ?? listing.seller_id),
+            sellerName: listing.sellerName || listing.seller_name || "TIPian",
+            courseCode: listing.courseCode || listing.course_code || "",
+            condition: listing.condition || listing.item_condition || "",
+            price: Number(listing.price || 0),
+            image: mediaUrl(listing.image) || FALLBACK_IMAGE,
+            images: (listing.images || []).map(mediaUrl),
+            createdAt: listing.createdAt || listing.created_at,
+            status: listing.status || "active"
+        }));
+        const remoteIds = new Set(remoteListings.map(listing => listing.id));
+        const localListings = getListings().filter(
+            listing =>
+                !/^\d+$/.test(String(listing.id)) &&
+                listing.status !== "draft"
+        );
+        saveListings([...localListings, ...remoteListings]);
+        const selectedListingId = localStorage.getItem("resource_selected_listing");
+        if (
+            selectedListingId &&
+            /^\d+$/.test(selectedListingId) &&
+            !remoteIds.has(selectedListingId)
+        ) {
+            localStorage.removeItem("resource_selected_listing");
+        }
+        renderAll();
+    } catch {}
+}
+
+// Moderation can happen in a separate admin session while this page stays open.
+window.addEventListener("focus", syncRemoteListings);
+document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) syncRemoteListings();
+});
+setInterval(syncRemoteListings, 30000);
+
+function sanitizeBlockedListings() {
+
+const blockedNames = new Set([
+    "Kate Mendoza",
+    "Eunice Anne Mendoza",
+    "Charisse Kate Mendoza",
+    "Charisse Kate"
+]);
+
+const listings = readStorage(STORAGE.listings, []);
+const filtered = listings.filter(listing => {
+    const rawSeller = [
+        listing?.sellerName,
+        listing?.seller?.name,
+        listing?.seller?.firstName,
+        listing?.seller?.middleName,
+        listing?.seller?.lastName,
+        [listing?.seller?.firstName, listing?.seller?.middleName, listing?.seller?.lastName].filter(Boolean).join(" "),
+        [listing?.firstName, listing?.middleName, listing?.lastName].filter(Boolean).join(" "),
+        [listing?.sellerFirstName, listing?.sellerMiddleName, listing?.sellerLastName].filter(Boolean).join(" ")
+    ].filter(Boolean).map(value => String(value).trim()).filter(Boolean);
+
+    const sellerName = rawSeller.join(" ").trim();
+    const safeName = sellerName.replace(/\s+/g, " ");
+
+    return !blockedNames.has(safeName) && !blockedNames.has(safeName.replace(/\s+/g, " "));
+});
+
+if (filtered.length !== listings.length) {
+    saveListings(filtered);
+}
+
+}
+
+function saveMessages(messages) {
+writeStorage(STORAGE.messages, messages);
+}
+
+function saveSaved(saved) {
+writeStorage(STORAGE.saved, saved);
+}
+
+function saveCart(cart) {
+writeStorage(STORAGE.cart, cart);
+}
+
+function savePurchases(purchases) {
+writeStorage(STORAGE.purchases, purchases);
+}
+
+function updateCurrentUser(updates) {
+
+const userId = getCurrentUserId();
+
+if (!userId) return null;
+
+const users = getUsers();
+const index = users.findIndex(user => user.id === userId);
+
+if (index < 0) return null;
+
+users[index] = {
+    ...users[index],
+    ...updates
+};
+
+saveUsers(users);
+
+return users[index];
+
+}
+
+function getUserCart(userId = getCurrentUserId()) {
+
+if (!userId) return [];
+
+return getCart().filter(item => item.userId === userId);
+
+}
+
+function normalizeSavedEntries(entries, fallbackUserId = getCurrentUserId()) {
+
+return (Array.isArray(entries) ? entries : [])
+    .map(entry => {
+        if (typeof entry === "string") {
+            return {
+                id: `saved_${entry}`,
+                userId: fallbackUserId,
+                listingId: entry,
+                savedAt: null
+            };
+        }
+
+        return entry;
+    })
+    .filter(entry => entry && entry.listingId);
+
+}
+
+function getUserSaved(userId = getCurrentUserId()) {
+
+if (!userId) return [];
+
+return normalizeSavedEntries(getSaved(), userId)
+    .filter(entry => entry.userId === userId);
+
+}
+
+function escapeHTML(value = "") {
+
+value = mediaUrl(value);
+
+return String(value).replace(
+    /[&<>"']/g,
+    char => ({
+
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#039;"
+
+    })[char]
+);
+
+
+}
+
+function peso(value) {
+
+
+return `₱${Number(value || 0)
+    .toLocaleString("en-PH")}`;
+
+
+}
+
+function formatDate(iso) {
+
+
+try {
+
+    return new Date(iso).toLocaleDateString(
+        "en-PH",
+        {
+            month: "short",
+            day: "numeric",
+            year: "numeric"
+        }
+    );
+
+} catch {
+
+    return "—";
+
+}
+
+
+}
+
+function formatTime(iso) {
+
+
+try {
+
+    return new Date(iso).toLocaleTimeString(
+        [],
+        {
+            hour: "2-digit",
+            minute: "2-digit"
+        }
+    );
+
+} catch {
+
+    return "";
+
+}
+
+
+}
+
+function toast(message, type = "success") {
+
+
+const container = $("#toast-container");
+
+if (!container) return;
+
+const box = document.createElement("div");
+
+box.className = `toast ${type}`;
+
+box.textContent = message;
+
+container.appendChild(box);
+
+setTimeout(
+    () => box.remove(),
+    2800
+);
+
+
+}
+
+function requireLogin() {
+
+
+if (!getCurrentUser()) {
+
+    toast(
+        "Please log in first.",
+        "error"
+    );
+
+    goToPage("login");
+
+    switchAuthTab("login");
+
+    return false;
+
+}
+
+return true;
+
+
+}
+
+/* ==========================================================
+NAVIGATION
+========================================================== */
+
+function closeNavigationMenu() {
+
+document.body.classList.remove("menu-open");
+
+const button = $("#menu-toggle-btn");
+
+if (button) {
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-label", "Open navigation menu");
+}
+
+}
+
+function toggleNavigationMenu() {
+
+const willOpen =
+    !document.body.classList.contains("menu-open");
+
+document.body.classList.toggle("menu-open", willOpen);
+
+const button = $("#menu-toggle-btn");
+
+if (button) {
+    button.setAttribute("aria-expanded", String(willOpen));
+    button.setAttribute(
+        "aria-label",
+        willOpen ? "Close navigation menu" : "Open navigation menu"
+    );
+}
+
+}
+
+function goToPage(pageKey) {
+
+
+const target =
+    $(`#page-${pageKey}`);
+
+if (!target) return;
+
+closeNavigationMenu();
+
+
+$$(".page").forEach(page => {
+
+    page.classList.remove("active");
+
+});
+
+
+$$(".nav-item").forEach(item => {
+
+    item.classList.remove("active");
+
+});
+
+
+$$(".header-nav-link").forEach(item => {
+
+    item.classList.remove("active");
+
+});
+
+$("#page-login")?.classList.remove("verification-only");
+
+target.classList.add("active");
+
+const currentUrl = new URL(window.location.href);
+currentUrl.searchParams.set("page", pageKey);
+window.history.replaceState({}, "", currentUrl);
+
+
+const nav =
+    $(`.nav-item[data-page="${pageKey}"]`);
+
+if (nav) {
+    nav.classList.add("active");
+}
+
+
+const headerNav =
+    $(`.header-nav-link[data-header-page="${pageKey}"]`);
+
+if (headerNav) {
+    headerNav.classList.add("active");
+}
+
+
+if (pageKey === "dashboard")
+    renderDashboard();
+
+if (pageKey === "browse")
+    renderBrowse();
+
+if (pageKey === "saved")
+    renderSavedItems();
+
+if (pageKey === "listing")
+    renderListingDetail();
+
+if (pageKey === "create")
+    prepareCreatePage();
+
+if (pageKey === "profile")
+    renderProfile();
+
+if (pageKey === "messaging") {
+    remoteMessagesLoaded = false;
+    refreshRemoteMessages(true);
+    renderMessaging();
+}
+
+
+window.scrollTo({
+    top: 0,
+    behavior: "smooth"
+});
+
+
+}
+
+/* ==========================================================
+AUTHENTICATION
+========================================================== */
+
+function switchAuthTab(tab) {
+
+$("#page-login").classList.remove("verification-only");
+
+const loginTab =
+    $("#tab-login");
+
+const signupTab =
+    $("#tab-signup");
+
+const loginForm =
+    $("#login-form");
+
+const signupForm =
+    $("#signup-form");
+
+
+if (tab === "signup") {
+
+    signupTab.classList.add("active");
+
+    loginTab.classList.remove("active");
+
+    signupForm.classList.remove("hidden");
+
+    loginForm.classList.add("hidden");
+
+} else {
+
+    loginTab.classList.add("active");
+
+    signupTab.classList.remove("active");
+
+    loginForm.classList.remove("hidden");
+
+    signupForm.classList.add("hidden");
+
+}
+
+
+}
+
+function validateTipEmail(email) {
+
+
+return email
+    .toLowerCase()
+    .endsWith("@tip.edu.ph");
+
+
+}
+
+function validateStudentId(studentId) {
+
+
+return /^[A-Za-z0-9-]{5,20}$/.test(
+    studentId.trim()
+);
+
+
+}
+
+function getUserDisplayName(user) {
+
+
+if (!user) return "TIPian";
+
+if (user.name) return user.name;
+
+return [
+    user.firstName,
+    user.middleName,
+    user.lastName
+]
+    .filter(Boolean)
+    .join(" ");
+
+
+}
+
+function getUserFirstName(user) {
+
+
+if (!user) return "TIPian";
+
+return (
+    user.firstName ||
+    user.name?.split(" ")[0] ||
+    "TIPian"
+);
+
+
+}
+
+function getNotificationSettings(user) {
+
+return {
+    messages: true,
+    listingActivity: true,
+    ...(user?.notifications || {})
+};
+
+}
+
+function getPrivacySettings(user) {
+
+return {
+    showProfilePhoto: true,
+    showCourse: true,
+    ...(user?.privacy || {})
+};
+
+}
+
+function getRatingSummary(user, role) {
+
+const rating = user?.ratings?.[role] || {};
+const score = Number(rating.score);
+
+return {
+    score: Number.isFinite(score) && score > 0
+        ? score.toFixed(1)
+        : null,
+    count: Math.max(0, Number(rating.count) || 0)
+};
+
+}
+
+function formatRating(user, role, compact = false) {
+
+const rating = getRatingSummary(user, role);
+const label = role === "seller" ? "Seller" : "Buyer";
+
+if (rating.score === null) {
+    return "No ratings yet";
+}
+
+return compact
+    ? `★ ${rating.score} ${label}`
+    : `★ ${rating.score} ${label} rating`;
+
+}
+
+function avatarMarkup(user, respectPrivacy = false) {
+
+const canShowPhoto =
+    user?.profilePhoto &&
+    (!respectPrivacy || getPrivacySettings(user).showProfilePhoto);
+
+if (!canShowPhoto) return "👤";
+
+return `<img src="${escapeHTML(mediaUrl(user.profilePhoto))}" alt="${escapeHTML(getUserFirstName(user))}'s profile photo">`;
+
+}
+
+function openImageViewer(src, caption = "Image preview") {
+
+const lightbox = $("#image-lightbox");
+const image = $("#image-lightbox-image");
+const text = $("#image-lightbox-caption");
+
+if (!lightbox || !image || !src) return;
+
+image.src = src;
+image.alt = caption;
+text.textContent = caption;
+lightbox.classList.remove("hidden");
+document.body.classList.add("image-viewer-open");
+
+}
+
+function closeImageViewer() {
+
+const lightbox = $("#image-lightbox");
+
+if (!lightbox) return;
+
+lightbox.classList.add("hidden");
+document.body.classList.remove("image-viewer-open");
+
+}
+
+/* ==========================================================
+TOP HEADER
+========================================================== */
+
+function renderTopHeader() {
+
+
+const area =
+    $("#top-header-actions");
+
+if (!area) return;
+
+
+const user =
+    getCurrentUser();
+
+
+if (user) {
+
+    area.innerHTML = `
+
+        <button
+            class="header-login-btn header-control-btn"
+            id="top-logout-btn">
+
+            Log Out
+
+        </button>
+
+        <button
+            class="header-profile-btn header-control-btn"
+            id="top-profile-btn">
+
+            <span class="profile-button-avatar" aria-hidden="true">${avatarMarkup(user)}</span>
+            <span>${escapeHTML(
+                getUserFirstName(user)
+            )}</span>
+
+        </button>
+
+    `;
+
+
+    $("#top-profile-btn")
+        .addEventListener(
+            "click",
+            () => {
+                localStorage.removeItem("resource_profile_user");
+                goToPage("profile");
+            }
+        );
+
+
+    $("#top-logout-btn")
+        .addEventListener(
+            "click",
+            logout
+        );
+
+} else {
+
+    area.innerHTML = `
+
+        <button
+            class="header-login-btn header-control-btn"
+            id="top-login-btn">
+
+            Log In
+
+        </button>
+
+        <button
+            class="header-signup-btn header-control-btn"
+            id="top-signup-btn">
+
+            Sign Up
+
+        </button>
+
+        <button
+            class="header-profile-btn header-control-btn"
+            id="top-profile-btn">
+
+            <span class="profile-button-avatar" aria-hidden="true">👤</span>
+            <span>Profile</span>
+
+        </button>
+
+    `;
+
+
+    $("#top-profile-btn")
+        .addEventListener(
+            "click",
+            () => {
+                if (requireLogin()) {
+                    localStorage.removeItem("resource_profile_user");
+                    goToPage("profile");
+                }
+            }
+        );
+
+
+    $("#top-login-btn")
+        .addEventListener(
+            "click",
+            () => {
+
+                goToPage("login");
+
+                switchAuthTab("login");
+
+            }
+        );
+
+
+    $("#top-signup-btn")
+        .addEventListener(
+            "click",
+            () => {
+
+                goToPage("login");
+
+                switchAuthTab("signup");
+
+            }
+        );
+
+}
+
+
+}
+
+async function logout() {
+
+    if (!window.confirm("Are you sure you want to log out?")) return;
+
+    try {
+        await fetch("../backend/php/auth/logout.php", { method: "POST" });
+    } catch (error) {
+        // Clear the local session and login form even if the server is unreachable.
+    }
+
+    localStorage.removeItem(
+        STORAGE.session
+    );
+
+    $("#login-form").reset();
+    const loginButton = $("#login-form").querySelector('button[type="submit"]');
+    if (loginButton) {
+        loginButton.disabled = false;
+        loginButton.textContent = "Log In";
+    }
+    $("#login-role").value = "student";
+    $("#login-password").type = "password";
+    $("#toggle-password").textContent = "👁";
+    $("#login-verification-box").classList.add("hidden");
+    $("#login-form").classList.remove("hidden");
+    $("#verification-form").reset();
+    $("#login-verification-status").textContent = "Preparing your verification code...";
+
+    selectedConversationUserId = null;
+
+    toast(
+        "You have been logged out."
+    );
+
+    renderAll();
+
+    goToPage("login");
+
+    switchAuthTab("login");
+
+}
+async function sendSignupVerificationCode() {
+    const status = $("#signup-verification-status");
+    const resendButton = $("#signup-resend-code-btn");
+    status.textContent = "Sending a verification code to your TIP email...";
+    resendButton.disabled = true;
+
+    try {
+        const response = await fetch("../backend/php/auth/send-login-verification.php", {
+            method: "POST",
+            headers: { Accept: "application/json" }
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+            status.textContent = result.message || "Could not send the verification code. Please try again.";
+            toast(status.textContent, "error");
+            return;
+        }
+        status.textContent = "A 6-digit code was sent to your TIP email. Enter it below to complete your registration.";
+        toast(result.message || "Verification code sent.");
+    } catch (error) {
+        status.textContent = "The verification email could not be sent. Check your connection, then try again.";
+        toast(status.textContent, "error");
+    } finally {
+        resendButton.disabled = false;
+    }
+}
+
+/* ==========================================================
+DASHBOARD
+========================================================== */
+
+function renderDashboard() {
+
+
+renderTopHeader();
+
+
+const user =
+    getCurrentUser();
+
+
+$("#welcome-title").textContent =
+    user
+        ? `Welcome back, ${getUserFirstName(user)}!`
+        : "Welcome to ReSource!";
+
+
+$("#welcome-sub").textContent =
+    user
+
+        ? "Find what you need, list what you have, and connect with fellow TIPians."
+
+        : "Find useful campus resources, discover listings, and connect with fellow TIPians. Sign up to start buying and selling.";
+
+
+const listings =
+    [...getListings()]
+        .filter(item => item.status === "active")
+        .sort(
+            (a, b) =>
+                new Date(b.createdAt) -
+                new Date(a.createdAt)
+        )
+        .slice(0, 4);
+
+
+renderItemGrid(
+    $("#recently-listed-grid"),
+    listings,
+    false
+);
+
+
+}
+
+/* ==========================================================
+ITEM GRID
+========================================================== */
+
+function renderItemGrid(
+container,
+items,
+highlight = false
+) {
+
+
+if (!container) return;
+
+
+container.innerHTML = "";
+
+
+if (!items.length) {
+
+    container.innerHTML = `
+
+        <div
+            class="empty-state"
+            style="grid-column:1 / -1;">
+
+            <div class="empty-icon">
+                +
+            </div>
+
+            <h3>
+                No listings yet
+            </h3>
+
+            <p>
+                ReSource is currently waiting for its first listing.
+                Be the first TIPian to post something.
+            </p>
+
+            <button
+                class="btn btn-yellow"
+                data-goto="create">
+
+                Create Listing
+
+            </button>
+
+        </div>
+
+    `;
+
+
+    const button =
+        $('button[data-goto="create"]', container);
+
+
+    if (button) {
+
+        button.addEventListener(
+            "click",
+            () => {
+
+                if (!requireLogin()) return;
+
+                goToPage("create");
+
+            }
+        );
+
+    }
+
+    return;
+
+}
+
+
+items.forEach(item => {
+
+    const card =
+        document.createElement("div");
+
+
+    card.className =
+        "item-card";
+
+
+    card.innerHTML = `
+
+        <div class="item-thumb">
+
+            <img
+                src="${escapeHTML(
+                    item.image ||
+                    FALLBACK_IMAGE
+                )}"
+                alt="${escapeHTML(item.title)}"
+                loading="lazy">
+
+        </div>
+
+
+        <div class="item-title">
+            ${escapeHTML(item.title)}
+        </div>
+
+
+        <div class="item-price">
+            ${peso(item.price)}
+        </div>
+
+
+        <div class="item-user">
+            👤 ${escapeHTML(
+                item.sellerName ||
+                "TIPian"
+            )}
+        </div>
+
+
+        <div class="item-meta-row">
+
+            <span class="item-category">
+                ${escapeHTML(
+                    item.category ||
+                    "Other"
+                )}
+            </span>
+
+            <span class="item-category">
+                ${escapeHTML(
+                    item.condition ||
+                    ""
+                )}
+            </span>
+
+        </div>
+
+    `;
+
+
+    const previewImage = $("img", card);
+
+    previewImage.addEventListener(
+        "click",
+        event => {
+            event.stopPropagation();
+            openImageViewer(
+                previewImage.src,
+                item.title || "Listing image"
+            );
+        }
+    );
+
+    card.addEventListener(
+        "click",
+        () => {
+
+            localStorage.setItem(
+                "resource_selected_listing",
+                item.id
+            );
+
+            goToPage("listing");
+
+        }
+    );
+
+
+    container.appendChild(card);
+
+});
+
+
+}
+
+/* ==========================================================
+BROWSE
+========================================================== */
+
+function getFilteredListings() {
+
+
+let listings =
+    [...getListings()];
+
+
+const query =
+    ($("#browse-search-input")?.value || "")
+        .trim()
+        .toLowerCase();
+
+
+const campus =
+    $("#filter-campus")?.value || "";
+
+
+const department =
+    $("#filter-department")?.value || "";
+
+
+const courseCode =
+    ($("#filter-coursecode")?.value || "")
+        .trim()
+        .toLowerCase();
+
+
+const category =
+    $("#filter-category")?.value || "";
+
+
+const condition =
+    $("#filter-condition")?.value || "";
+
+
+const min =
+    $("#filter-min")?.value
+        ? Number($("#filter-min").value)
+        : 0;
+
+
+const max =
+    $("#filter-max")?.value
+        ? Number($("#filter-max").value)
+        : Infinity;
+
+
+const sort =
+    $("#filter-sort")?.value ||
+    "newest";
+
+
+listings =
+    listings.filter(item => {
+
+        const searchable = [
+
+            item.title,
+            item.description,
+            item.category,
+            item.courseCode,
+            item.department,
+            item.sellerName
+
+        ]
+            .join(" ")
+            .toLowerCase();
+
+
+        const matchesQuery =
+            !query ||
+            searchable.includes(query);
+
+
+        return item.status === "active"
+
+            && matchesQuery
+
+            && (!campus ||
+                item.campus === campus)
+
+            && (!department ||
+                item.department
+                    ?.toLowerCase() ===
+                department.toLowerCase())
+
+            && (!courseCode ||
+                item.courseCode
+                    ?.toLowerCase()
+                    .includes(courseCode))
+
+            && (!category ||
+                item.category === category)
+
+            && (!condition ||
+                item.condition === condition)
+
+            && Number(item.price) >= min
+
+            && Number(item.price) <= max;
+
+    });
+
+
+if (sort === "price-low") {
+
+    listings.sort(
+        (a, b) =>
+            Number(a.price) -
+            Number(b.price)
+    );
+
+} else if (sort === "price-high") {
+
+    listings.sort(
+        (a, b) =>
+            Number(b.price) -
+            Number(a.price)
+    );
+
+} else if (sort === "title") {
+
+    listings.sort(
+        (a, b) =>
+            a.title.localeCompare(b.title)
+    );
+
+} else {
+
+    listings.sort(
+        (a, b) =>
+            new Date(b.createdAt) -
+            new Date(a.createdAt)
+    );
+
+}
+
+
+return listings;
+
+
+}
+
+function renderBrowse() {
+
+
+const listings =
+    getFilteredListings();
+
+
+renderItemGrid(
+    $("#browse-grid"),
+    listings,
+    true
+);
+
+
+$("#results-count-num")
+    .textContent = listings.length;
+
+
+}
+
+function resetFilters() {
+
+
+[
+    "filter-campus",
+    "filter-department",
+    "filter-category",
+    "filter-condition",
+    "filter-sort"
+].forEach(id => {
+
+    const el = $(`#${id}`);
+
+    if (el) {
+
+        el.value =
+            id === "filter-sort"
+                ? "newest"
+                : "";
+
+    }
+
+});
+
+
+[
+    "filter-coursecode",
+    "filter-min",
+    "filter-max",
+    "browse-search-input"
+].forEach(id => {
+
+    const el = $(`#${id}`);
+
+    if (el) el.value = "";
+
+});
+
+
+renderBrowse();
+
+
+}
+
+/* ==========================================================
+CART
+========================================================== */
+
+function updateCartBadge() {
+
+const badge = $("#nav-cart-count");
+
+if (!badge) return;
+
+const quantity = getUserCart().reduce(
+    (total, item) => total + Math.max(0, Number(item.quantity) || 0),
+    0
+);
+
+badge.textContent = quantity;
+badge.classList.toggle("hidden", quantity === 0);
+
+}
+
+function getCartRowsForUser(user) {
+
+const listings = new Map(
+    getListings().map(listing => [listing.id, listing])
+);
+
+return getUserCart(user.id)
+    .map(entry => ({
+        entry,
+        listing: listings.get(entry.listingId)
+    }))
+    .filter(({ entry, listing }) =>
+        listing &&
+        listing.status === "active" &&
+        listing.sellerId !== user.id &&
+        Number(entry.quantity) > 0
+    );
+
+}
+
+function addListingToCart(listingId) {
+
+if (!requireLogin()) return;
+
+const user = getCurrentUser();
+const listing = getListings().find(item => item.id === listingId);
+
+if (!listing || listing.status !== "active") {
+    toast("This listing is no longer available.", "error");
+    renderListingDetail();
+    return;
+}
+
+if (listing.sellerId === user.id) {
+    toast("You cannot add your own listing to the cart.", "error");
+    return;
+}
+
+const cart = getCart();
+const index = cart.findIndex(item =>
+    item.userId === user.id && item.listingId === listingId
+);
+
+if (index >= 0) {
+    cart[index].quantity = Math.min(99, Number(cart[index].quantity || 0) + 1);
+} else {
+    cart.push({
+        id: createId("cart"),
+        userId: user.id,
+        listingId,
+        quantity: 1,
+        addedAt: new Date().toISOString()
+    });
+}
+
+saveCart(cart);
+updateCartBadge();
+renderListingDetail();
+toast("Item added to your cart.");
+
+}
+
+function changeCartQuantity(listingId, amount) {
+
+const userId = getCurrentUserId();
+
+if (!userId) return;
+
+let cart = getCart();
+const index = cart.findIndex(item =>
+    item.userId === userId && item.listingId === listingId
+);
+
+if (index < 0) return;
+
+const quantity = Math.min(99, Number(cart[index].quantity || 0) + amount);
+
+if (quantity <= 0) {
+    cart = cart.filter((item, itemIndex) => itemIndex !== index);
+} else {
+    cart[index].quantity = quantity;
+}
+
+saveCart(cart);
+updateCartBadge();
+renderSavedItems();
+renderListingDetail();
+
+}
+
+function removeCartItem(listingId) {
+
+const userId = getCurrentUserId();
+
+saveCart(
+    getCart().filter(item =>
+        !(item.userId === userId && item.listingId === listingId)
+    )
+);
+
+updateSavedBadge();
+renderCart();
+renderListingDetail();
+
+}
+
+function renderCart() {
+
+const user = getCurrentUser();
+const warning = $("#cart-login-warning");
+const content = $("#cart-content");
+
+if (!warning || !content) return;
+
+if (!user) {
+    warning.classList.remove("hidden");
+    content.classList.add("hidden");
+    updateCartBadge();
+    return;
+}
+
+warning.classList.add("hidden");
+content.classList.remove("hidden");
+
+const rows = getCartRowsForUser(user);
+const validIds = new Set(rows.map(({ entry }) => entry.id));
+const cart = getCart();
+const cleanedCart = cart.filter(item =>
+    item.userId !== user.id || validIds.has(item.id)
+);
+
+if (cleanedCart.length !== cart.length) saveCart(cleanedCart);
+
+const itemsArea = $("#cart-items");
+const summary = $(".cart-summary", content);
+const quantity = rows.reduce(
+    (total, { entry }) => total + Number(entry.quantity || 0),
+    0
+);
+const total = rows.reduce(
+    (sum, { entry, listing }) => sum + Number(listing.price || 0) * Number(entry.quantity || 0),
+    0
+);
+
+$("#cart-summary-quantity").textContent = quantity;
+$("#cart-summary-total").textContent = peso(total);
+summary.classList.toggle("hidden", rows.length === 0);
+
+if (!rows.length) {
+    itemsArea.innerHTML = `
+        <div class="empty-state cart-empty-state">
+            <div class="empty-icon">🛒</div>
+            <h3>Your cart is empty</h3>
+            <p>Add listings here, adjust their quantities, and check out when you are ready.</p>
+            <button class="btn btn-yellow" id="cart-browse-btn">Browse Listings</button>
+        </div>
+    `;
+
+    $("#cart-browse-btn").addEventListener("click", () => goToPage("browse"));
+    updateCartBadge();
+    return;
+}
+
+itemsArea.innerHTML = rows.map(({ entry, listing }) => `
+    <article class="cart-row" data-listing-id="${escapeHTML(listing.id)}">
+        <button class="cart-image-button" type="button" data-cart-preview="${escapeHTML(mediaUrl(listing.image) || FALLBACK_IMAGE)}" data-cart-caption="${escapeHTML(listing.title)}">
+            <img src="${escapeHTML(mediaUrl(listing.image) || FALLBACK_IMAGE)}" alt="${escapeHTML(listing.title)}">
+        </button>
+        <div class="cart-item-info">
+            <button class="cart-item-title" type="button" data-cart-open="${escapeHTML(listing.id)}">${escapeHTML(listing.title)}</button>
+            <p>${escapeHTML(listing.category || "Other")} · ${escapeHTML(listing.condition || "")}</p>
+            <span>Sold by ${escapeHTML(listing.sellerName || "TIPian")}</span>
+        </div>
+        <div class="cart-quantity-control" aria-label="Quantity for ${escapeHTML(listing.title)}">
+            <button type="button" data-cart-action="decrease" data-listing-id="${escapeHTML(listing.id)}" aria-label="Decrease quantity">−</button>
+            <strong>${Number(entry.quantity)}</strong>
+            <button type="button" data-cart-action="increase" data-listing-id="${escapeHTML(listing.id)}" aria-label="Increase quantity">+</button>
+        </div>
+        <div class="cart-row-total">
+            <strong>${peso(Number(listing.price || 0) * Number(entry.quantity || 0))}</strong>
+            <button type="button" data-cart-action="remove" data-listing-id="${escapeHTML(listing.id)}">Remove</button>
+        </div>
+    </article>
+`).join("");
+
+$$('[data-cart-preview]', itemsArea).forEach(button => {
+    button.addEventListener("click", () =>
+        openImageViewer(button.dataset.cartPreview, button.dataset.cartCaption)
+    );
+});
+
+$$('[data-cart-open]', itemsArea).forEach(button => {
+    button.addEventListener("click", () => {
+        localStorage.setItem("resource_selected_listing", button.dataset.cartOpen);
+        goToPage("listing");
+    });
+});
+
+$$('[data-cart-action]', itemsArea).forEach(button => {
+    button.addEventListener("click", () => {
+        const { cartAction, listingId } = button.dataset;
+
+        if (cartAction === "increase") changeCartQuantity(listingId, 1);
+        if (cartAction === "decrease") changeCartQuantity(listingId, -1);
+        if (cartAction === "remove") removeCartItem(listingId);
+    });
+});
+
+updateCartBadge();
+
+}
+
+async function checkoutCart() {
+
+const user = getCurrentUser();
+
+if (!user) {
+    requireLogin();
+    return;
+}
+
+const rows = getCartRowsForUser(user);
+
+if (!rows.length) {
+    toast("Your cart is empty.", "error");
+    return;
+}
+
+if (!confirm("Complete this purchase? Completed purchases can be used to rate the other user.")) return;
+
+let purchasedRows = rows;
+const databaseBacked = /^\d+$/.test(String(user.id)) &&
+    rows.every(({ listing }) => /^\d+$/.test(String(listing.id)));
+
+if (databaseBacked) {
+    try {
+        const response = await fetch("../backend/php/purchases/checkout.php", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+                items: JSON.stringify(rows.map(({ entry, listing }) => ({
+                    listing_id: listing.id,
+                    quantity: Number(entry.quantity || 1)
+                })))
+            })
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+            toast(result.message || "Unable to complete this purchase.", "error");
+            return;
+        }
+
+        const purchasedIds = new Set(
+            (result.purchased_listing_ids || []).map(String)
+        );
+        if (!purchasedIds.size) {
+            toast("No cart items were recorded as purchases.", "error");
+            return;
+        }
+        purchasedRows = rows.filter(({ listing }) => purchasedIds.has(String(listing.id)));
+    } catch (error) {
+        toast("The server is unavailable. Please try again.", "error");
+        return;
+    }
+}
+
+const listings = getListings();
+const purchases = getPurchases();
+const purchasedAt = new Date().toISOString();
+
+purchasedRows.forEach(({ entry, listing }) => {
+    const index = listings.findIndex(item => item.id === listing.id);
+
+    if (index < 0 || listings[index].status === "sold") return;
+
+    listings[index] = {
+        ...listings[index],
+        status: "sold",
+        buyerId: user.id,
+        soldAt: purchasedAt,
+        soldQuantity: Number(entry.quantity || 1)
+    };
+
+    purchases.push({
+        id: createId("purchase"),
+        buyerId: user.id,
+        sellerId: listing.sellerId,
+        listingId: listing.id,
+        title: listing.title,
+        image: listing.image || FALLBACK_IMAGE,
+        price: Number(listing.price || 0),
+        quantity: Number(entry.quantity || 1),
+        purchasedAt
+    });
+});
+
+saveListings(listings);
+savePurchases(purchases);
+const purchasedIds = new Set(purchasedRows.map(({ listing }) => String(listing.id)));
+saveCart(getCart().filter(item =>
+    item.userId !== user.id || !purchasedIds.has(String(item.listingId))
+));
+updateCartBadge();
+renderAll();
+localStorage.removeItem("resource_profile_user");
+goToPage("profile");
+showProfileTab("history");
+toast("Purchase completed. Your history and sold items are updated.");
+
+}
+
+/* ==========================================================
+SAVED ITEMS
+========================================================== */
+
+function updateSavedBadge() {
+
+const badge = $("#nav-saved-count");
+
+if (!badge) return;
+
+const count = getUserSaved().length;
+
+badge.textContent = count;
+badge.classList.toggle("hidden", count === 0);
+
+}
+
+function toggleSavedItem(listingId) {
+
+if (!requireLogin()) return;
+
+const user = getCurrentUser();
+const listing = getListings().find(item => item.id === listingId);
+
+if (!listing || listing.status === "sold") {
+    toast("This listing is no longer available.", "error");
+    renderListingDetail();
+    return;
+}
+
+const saved = normalizeSavedEntries(getSaved(), user.id);
+const index = saved.findIndex(entry =>
+    entry.userId === user.id && entry.listingId === listingId
+);
+
+if (index >= 0) {
+    saved.splice(index, 1);
+    toast("Removed from Saved Items.");
+} else {
+    saved.push({
+        id: createId("saved"),
+        userId: user.id,
+        listingId,
+        savedAt: new Date().toISOString()
+    });
+    toast("Item saved.");
+}
+
+saveSaved(saved);
+updateSavedBadge();
+renderSavedItems();
+renderListingDetail();
+
+}
+
+function removeSavedItem(listingId) {
+
+const userId = getCurrentUserId();
+
+saveSaved(
+    normalizeSavedEntries(getSaved(), userId)
+        .filter(entry =>
+            !(entry.userId === userId && entry.listingId === listingId)
+        )
+);
+
+updateSavedBadge();
+renderSavedItems();
+renderListingDetail();
+toast("Removed from Saved Items.");
+
+}
+
+function renderSavedItems() {
+
+const user = getCurrentUser();
+const warning = $("#saved-login-warning");
+const content = $("#saved-content");
+const grid = $("#saved-items-grid");
+
+if (!warning || !content || !grid) return;
+
+if (!user) {
+    warning.classList.remove("hidden");
+    content.classList.add("hidden");
+    updateSavedBadge();
+    return;
+}
+
+warning.classList.add("hidden");
+content.classList.remove("hidden");
+
+const listings = new Map(getListings().map(listing => [listing.id, listing]));
+const rows = getUserSaved(user.id)
+    .map(entry => ({ entry, listing: listings.get(entry.listingId) }))
+    .filter(({ listing }) => listing && listing.status === "active");
+
+if (!rows.length) {
+    grid.innerHTML = `
+        <div class="empty-state" style="grid-column: 1 / -1;">
+            <div class="empty-icon">🔖</div>
+            <h3>No saved items yet</h3>
+            <p>Tap Save Item on a listing to keep it here.</p>
+            <button class="btn btn-yellow" id="saved-browse-btn">Browse Listings</button>
+        </div>
+    `;
+
+    $("#saved-browse-btn").addEventListener("click", () => goToPage("browse"));
+    updateSavedBadge();
+    return;
+}
+
+grid.innerHTML = rows.map(({ listing }) => `
+    <article class="saved-item-card">
+        <button
+            class="saved-item-image"
+            type="button"
+            data-saved-preview="${escapeHTML(mediaUrl(listing.image) || FALLBACK_IMAGE)}"
+            data-saved-caption="${escapeHTML(listing.title)}">
+            <img src="${escapeHTML(mediaUrl(listing.image) || FALLBACK_IMAGE)}" alt="${escapeHTML(listing.title)}">
+        </button>
+        <div class="saved-item-content">
+            <button class="saved-item-title" type="button" data-saved-open="${escapeHTML(listing.id)}">${escapeHTML(listing.title)}</button>
+            <p>${peso(listing.price)} · ${escapeHTML(listing.condition || "")}</p>
+            <button class="saved-remove-btn" type="button" data-saved-remove="${escapeHTML(listing.id)}">Remove</button>
+        </div>
+    </article>
+`).join("");
+
+$$('[data-saved-preview]', grid).forEach(button => {
+    button.addEventListener("click", () =>
+        openImageViewer(button.dataset.savedPreview, button.dataset.savedCaption)
+    );
+});
+
+$$('[data-saved-open]', grid).forEach(button => {
+    button.addEventListener("click", () => {
+        localStorage.setItem("resource_selected_listing", button.dataset.savedOpen);
+        goToPage("listing");
+    });
+});
+
+$$('[data-saved-remove]', grid).forEach(button => {
+    button.addEventListener("click", () => removeSavedItem(button.dataset.savedRemove));
+});
+
+updateSavedBadge();
+
+}
+
+async function markListingAsSold(listingId) {
+
+const seller = getCurrentUser();
+const listings = getListings();
+const index = listings.findIndex(item => item.id === listingId);
+const listing = listings[index];
+
+if (!seller || !listing || listing.sellerId !== seller.id || listing.status === "sold") return;
+
+const buyerEmail = prompt(
+    "After the handoff, enter the buyer's TIP email used in the listing conversation to record the exchange and enable ratings:"
+);
+
+if (buyerEmail === null) return;
+
+let buyer = getUsers().find(user =>
+    user.email?.toLowerCase() === buyerEmail.trim().toLowerCase()
+);
+
+const databaseBacked = /^\d+$/.test(String(seller.id)) &&
+    /^\d+$/.test(String(listing.id));
+
+if ((!buyer && !databaseBacked) || buyer?.id === seller.id) {
+    toast("Enter the email of another registered TIP buyer.", "error");
+    return;
+}
+
+if (!confirm(`Mark \"${listing.title}\" as sold to ${buyer ? getUserDisplayName(buyer) : buyerEmail.trim()}?`)) return;
+
+if (databaseBacked) {
+    try {
+        const response = await fetch("../backend/php/listings/mark-sold.php", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+                listing_id: listing.id,
+                buyer_email: buyerEmail.trim().toLowerCase()
+            })
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+            toast(result.message || "Could not record the sale.", "error");
+            return;
+        }
+
+        if (result.buyer) {
+            buyer = {
+                id: String(result.buyer.id),
+                firstName: result.buyer.first_name,
+                middleName: result.buyer.middle_name || "",
+                lastName: result.buyer.last_name,
+                email: buyerEmail.trim().toLowerCase()
+            };
+            if (!getUsers().some(account => account.id === buyer.id)) {
+                saveUsers([...getUsers(), buyer]);
+            }
+        }
+    } catch (error) {
+        toast("The server is unavailable. Please try again.", "error");
+        return;
+    }
+}
+
+const purchasedAt = new Date().toISOString();
+
+listings[index] = {
+    ...listing,
+    status: "sold",
+    buyerId: buyer.id,
+    soldAt: purchasedAt,
+    soldQuantity: 1
+};
+
+const purchases = getPurchases();
+purchases.push({
+    id: createId("purchase"),
+    buyerId: buyer.id,
+    sellerId: seller.id,
+    listingId: listing.id,
+    title: listing.title,
+    image: listing.image || FALLBACK_IMAGE,
+    price: Number(listing.price || 0),
+    quantity: 1,
+    purchasedAt
+});
+
+saveListings(listings);
+savePurchases(purchases);
+renderAll();
+if (databaseBacked) {
+    selectedConversationUserId = String(buyer.id);
+    selectedConversationListingId = String(listing.id);
+    remoteMessagesLoaded = false;
+    goToPage("messaging");
+    toast("Exchange recorded. The buyer can rate you in this conversation.");
+} else {
+    goToPage("profile");
+    showProfileTab("sold");
+    toast("Exchange recorded and added to the buyer's Purchase History.");
+}
+
+}
+
+/* ==========================================================
+LISTING DETAIL
+========================================================== */
+
+function renderListingDetail() {
+
+
+const listingId =
+    localStorage.getItem(
+        "resource_selected_listing"
+    );
+
+
+const listing =
+    getListings().find(
+        item => item.id === listingId
+    );
+
+
+const empty =
+    $("#listing-detail-empty");
+
+
+const content =
+    $("#listing-detail-content");
+
+
+if (!listing) {
+
+    empty.classList.remove("hidden");
+
+    content.classList.add("hidden");
+
+    return;
+
+}
+
+
+empty.classList.add("hidden");
+
+content.classList.remove("hidden");
+
+
+const currentUser =
+    getCurrentUser();
+
+
+const isOwner =
+    currentUser &&
+    currentUser.id === listing.sellerId;
+
+
+const isSold = listing.status === "sold";
+const isPending = listing.status === "draft";
+const isRejected = listing.status === "hidden";
+const isAvailable = listing.status === "active";
+
+
+const savedItem = currentUser
+    ? getUserSaved(currentUser.id).find(item => item.listingId === listing.id)
+    : null;
+
+
+const seller = getUsers().find(user => user.id === listing.sellerId);
+
+
+$("#detail-image").src =
+    mediaUrl(listing.image) ||
+    FALLBACK_IMAGE;
+
+
+$("#detail-image").alt =
+    listing.title;
+
+
+$("#detail-image").onclick =
+    () => openImageViewer(
+        $("#detail-image").src,
+        listing.title || "Listing image"
+    );
+
+
+$("#detail-tags").innerHTML = [
+
+    listing.courseCode
+        ? `<span class="tag">${escapeHTML(
+            listing.courseCode
+        )}</span>`
+        : "",
+
+    listing.department
+        ? `<span class="tag">${escapeHTML(
+            listing.department
+        )}</span>`
+        : "",
+
+    `<span class="tag">${escapeHTML(
+        listing.category ||
+        "Other"
+    )}</span>`,
+
+    `<span class="tag">${escapeHTML(
+        listing.condition ||
+        ""
+    )}</span>`
+
+].join("");
+
+
+$("#detail-title").textContent =
+    listing.title;
+
+
+$("#detail-price").textContent =
+    peso(listing.price);
+
+
+$("#detail-description").textContent =
+    listing.description ||
+    "No description provided.";
+
+
+$("#detail-campus").textContent =
+    listing.campus ||
+    "—";
+
+
+$("#detail-course").textContent =
+    listing.courseCode ||
+    "—";
+
+
+$("#detail-date").textContent =
+    formatDate(
+        listing.createdAt
+    );
+
+
+$("#detail-seller-name").textContent =
+    listing.sellerName ||
+    "TIPian";
+
+
+$("#detail-seller-avatar").innerHTML =
+    avatarMarkup(seller, true);
+
+
+$("#detail-seller-rating").textContent =
+    formatRating(seller, "seller");
+
+const detailListingId = listing.id;
+fetch(`../backend/php/users/ratings.php?user_id=${encodeURIComponent(listing.sellerId)}`, {
+    headers: { Accept: "application/json" }
+})
+    .then(response => response.json())
+    .then(result => {
+        if (
+            !result.success ||
+            localStorage.getItem("resource_selected_listing") !== detailListingId
+        ) return;
+
+        const count = Number(result.rating_count) || 0;
+        $("#detail-seller-rating").textContent = count
+            ? `★ ${Number(result.average_rating).toFixed(1)} / 5 · ${count} ${count === 1 ? "rating" : "ratings"}`
+            : "No ratings yet";
+    })
+    .catch(() => {});
+
+
+$("#detail-seller-active").textContent =
+    isRejected
+        ? `Rejected by admin. Reason: ${listing.rejection_reason || "No reason provided."}`
+        : isPending
+        ? "Awaiting admin approval"
+        : isSold
+
+        ? "This item has been sold"
+
+        : listing.sellerId ===
+        getCurrentUserId()
+
+        ? "This is your listing"
+
+        : "TIPian seller";
+
+
+$("#save-item-btn").textContent =
+    isRejected
+        ? "Rejected"
+        : isPending
+        ? "Pending Review"
+        : isSold
+        ? "Sold"
+        : isOwner
+            ? "Your Listing"
+            : savedItem
+                ? "Saved ✓"
+                : "Save Item";
+
+
+$("#save-item-btn").disabled =
+    !!isOwner ||
+    !isAvailable;
+
+
+$("#mark-sold-btn")
+    .classList.toggle(
+        "hidden",
+        !isOwner || !isAvailable
+    );
+
+
+$("#mark-sold-btn").disabled =
+    !isOwner ||
+    !isAvailable;
+
+
+$("#delete-listing-btn")
+    .classList.toggle(
+        "hidden",
+        !isOwner
+    );
+
+
+    $("#report-listing-btn")
+        .classList.toggle("hidden", !!isOwner);
+    $("#report-listing-form").classList.add("hidden");
+
+
+$("#message-seller-btn").disabled =
+    !!isOwner ||
+    !isAvailable;
+
+
+const images =
+    Array.isArray(listing.images) &&
+    listing.images.length
+
+        ? listing.images
+
+        : [
+            listing.image ||
+            FALLBACK_IMAGE
+        ];
+
+
+$("#listing-thumbs").innerHTML =
+    images.map(
+        (src, index) => `
+
+            <div class="thumb">
+
+                <img
+                    src="${escapeHTML(mediaUrl(src))}"
+                    alt="Thumbnail ${index + 1}"
+                    data-image="${escapeHTML(mediaUrl(src))}">
+
+            </div>
+
+        `
+    ).join("");
+
+
+$$("#listing-thumbs .thumb img")
+    .forEach(img => {
+
+        img.addEventListener(
+            "click",
+            () => {
+
+                $("#detail-image").src =
+                    img.dataset.image;
+
+            }
+        );
+
+    });
+
+
+}
+
+/* ==========================================================
+CREATE LISTING
+========================================================== */
+
+let selectedListingImages = [];
+let selectedListingFiles = [];
+
+function prepareCreatePage() {
+    const user = getCurrentUser();
+    const warning = $("#create-login-warning");
+    const form = $("#create-listing-form");
+
+    if (!user) {
+        warning.classList.remove("hidden");
+        form.classList.add("hidden");
+    } else {
+        warning.classList.add("hidden");
+        form.classList.remove("hidden");
+
+        if (!$("#create-campus").value) {
+            $("#create-campus").value = user.campus || "Manila";
+        }
+    }
+}
+
+function resetCreateForm() {
+
+
+$("#create-listing-form")?.reset();
+
+selectedListingImages = [];
+selectedListingFiles = [];
+
+
+$$(".photo-slot")
+    .forEach(slot => {
+
+        slot.innerHTML = `
+
+            <input
+                type="file"
+                accept="image/*"
+                class="photo-input"
+                hidden>
+
+            <span class="plus">
+                +
+            </span>
+
+        `;
+
+    });
+
+
+bindPhotoInputs();
+
+
+}
+
+function readImageAsDataURL(file) {
+
+
+return new Promise(
+    (resolve, reject) => {
+
+        const reader =
+            new FileReader();
+
+
+        reader.onload =
+            () => resolve(
+                reader.result
+            );
+
+
+        reader.onerror =
+            reject;
+
+
+        reader.readAsDataURL(file);
+
+    }
+);
+
+
+}
+
+async function handlePhotoChange(input) {
+
+
+const file =
+    input.files?.[0];
+
+
+if (!file) return;
+
+
+if (
+    file.size >
+    1.5 * 1024 * 1024
+) {
+
+    toast(
+        "Please choose images smaller than 1.5 MB each.",
+        "error"
+    );
+
+    input.value = "";
+
+    return;
+
+}
+
+
+try {
+
+    const dataUrl =
+        await readImageAsDataURL(file);
+
+
+    const slot =
+        input.closest(".photo-slot");
+
+
+    slot.innerHTML = `
+
+        <img
+            src="${dataUrl}"
+            alt="Selected image">
+
+        <input
+            type="file"
+            accept="image/*"
+            class="photo-input"
+            hidden>
+
+    `;
+
+
+    const newInput =
+        $(".photo-input", slot);
+
+
+    newInput.addEventListener(
+        "change",
+        () =>
+            handlePhotoChange(newInput)
+    );
+
+
+    $("img", slot).addEventListener(
+        "click",
+        event => {
+            event.preventDefault();
+            event.stopPropagation();
+            openImageViewer(
+                dataUrl,
+                "Listing photo preview"
+            );
+        }
+    );
+
+
+    selectedListingImages
+        .push(dataUrl);
+
+    selectedListingFiles
+        .push(file);
+
+
+} catch {
+
+    toast(
+        "Could not read that image.",
+        "error"
+    );
+
+}
+
+
+}
+
+function bindPhotoInputs() {
+
+
+$$(".photo-input")
+    .forEach(input => {
+
+        input.addEventListener(
+            "change",
+            () =>
+                handlePhotoChange(input)
+        );
+
+    });
+
+
+}
+
+/* ==========================================================
+PROFILE
+========================================================== */
+
+async function renderProfile() {
+    const sessionUser = getCurrentUser();
+    const requestedProfileId = localStorage.getItem("resource_profile_user");
+    const isOwnProfile = !requestedProfileId || requestedProfileId === String(sessionUser?.id);
+    const warning = $("#profile-login-warning");
+    const content = $("#profile-content");
+    const logoutBtn = $("#logout-btn");
+
+    if (!sessionUser) {
+        warning.classList.remove("hidden");
+        content.classList.add("hidden");
+        logoutBtn.classList.add("hidden");
+        return;
+    }
+
+    let user = sessionUser;
+    if (!isOwnProfile) {
+        try {
+            const response = await fetch(
+                `../backend/php/users/profile.php?id=${encodeURIComponent(requestedProfileId)}`,
+                { headers: { Accept: "application/json" } }
+            );
+            const result = await response.json();
+            if (!response.ok || !result.success || !result.user) {
+                throw new Error(result.message || "Unable to load this profile.");
+            }
+
+            const profile = result.user;
+            user = {
+                id: String(profile.id),
+                firstName: profile.first_name,
+                middleName: profile.middle_name || "",
+                lastName: profile.last_name,
+                studentId: profile.student_id || "",
+                course: profile.course || "",
+                campus: profile.campus || "",
+                role: profile.role,
+                profilePhoto: profile.profile_photo || "",
+                createdAt: profile.created_at
+            };
+        } catch (error) {
+            warning.classList.remove("hidden");
+            content.classList.add("hidden");
+            toast(error.message || "Unable to load this profile.", "error");
+            return;
+        }
+    }
+
+    if (localStorage.getItem("resource_profile_user") !== requestedProfileId) return;
+
+    warning.classList.add("hidden");
+    content.classList.remove("hidden");
+    logoutBtn.classList.toggle("hidden", !isOwnProfile);
+
+    $("#profile-avatar").innerHTML = avatarMarkup(user);
+    $("#profile-name").textContent = getUserDisplayName(user);
+    $("#profile-role").textContent = user.role === "admin" ? "Administrator" : "TIP Student";
+    $("#profile-course").textContent = `${user.course || "Course private"} • ReSource Member`;
+    $("#profile-campus").textContent = user.campus ? `📍 ${user.campus}` : "";
+    $("#profile-student-id").textContent = user.studentId ? `ID: ${user.studentId}` : "";
+    $("#profile-member-since").textContent = user.createdAt
+        ? `🗓 Member since ${formatDate(user.createdAt)}`
+        : "";
+    $("#profile-seller-rating").classList.add("hidden");
+    $("#profile-buyer-rating").classList.add("hidden");
+
+    $(".change-photo-label").classList.toggle("hidden", !isOwnProfile);
+    $("#profile-photo-input").disabled = !isOwnProfile;
+    $$(".ptab").forEach(tab => {
+        tab.classList.toggle("hidden", !isOwnProfile && tab.dataset.tab !== "listings");
+    });
+    const activeTab = $(".ptab.active")?.dataset.tab || "listings";
+    $$("#profile-content .profile-panel").forEach(panel => {
+        const visiblePanel = isOwnProfile ? `panel-${activeTab}` : "panel-listings";
+        panel.classList.toggle("hidden", panel.id !== visiblePanel);
+    });
+
+    if (isOwnProfile) {
+        const notifications = getNotificationSettings(user);
+        const privacy = getPrivacySettings(user);
+        $("#profile-first-name-input").value = user.firstName || "";
+        $("#profile-middle-name-input").value = user.middleName || "";
+        $("#profile-last-name-input").value = user.lastName || "";
+        $("#profile-course-input").value = user.course || "";
+        $("#profile-campus-input").value = user.campus || "Manila";
+        $("#notify-messages").checked = notifications.messages;
+        $("#notify-listings").checked = notifications.listingActivity;
+        $("#privacy-photo").checked = privacy.showProfilePhoto;
+        $("#privacy-course").checked = privacy.showCourse;
+    } else {
+        showProfileTab("listings");
+    }
+
+    const profileListings = getListings()
+        .filter(listing =>
+            String(listing.sellerId) === String(user.id) &&
+            listing.status !== "sold"
+        )
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    renderProfileListings(profileListings);
+
+    if (isOwnProfile) {
+        renderProfileSoldItems(
+            getListings()
+                .filter(listing =>
+                    String(listing.sellerId) === String(user.id) && listing.status === "sold"
+                )
+                .sort((a, b) => new Date(b.soldAt || b.createdAt) - new Date(a.soldAt || a.createdAt))
+        );
+        renderPurchaseHistory(user);
+    } else {
+        renderProfileSoldItems([]);
+        $("#purchase-history-list").innerHTML = "";
+    }
+
+    renderProfileRatings(user.id, isOwnProfile);
+}
+
+async function renderProfileRatings(profileUserId, isOwnProfile) {
+    const summary = $("#profile-rating-summary");
+    const form = $("#profile-rating-form");
+    const eligibilityMessage = $("#rating-eligibility-message");
+
+    try {
+        const response = await fetch(
+            `../backend/php/users/ratings.php?user_id=${encodeURIComponent(profileUserId)}`,
+            { headers: { Accept: "application/json" } }
+        );
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+            throw new Error(result.message || "Unable to load ratings.");
+        }
+
+        summary.textContent = result.rating_count
+            ? `★ ${Number(result.average_rating).toFixed(1)} / 5 · ${result.rating_count} ${result.rating_count === 1 ? "rating" : "ratings"}`
+            : "No ratings yet";
+
+        const eligiblePurchases = result.eligible_purchases || [];
+        const canRate = eligiblePurchases.length > 0;
+        form.reset();
+        $("#profile-rating-stars").dataset.rating = "0";
+        form.classList.toggle("hidden", isOwnProfile);
+        eligibilityMessage.classList.toggle("hidden", canRate || isOwnProfile);
+        eligibilityMessage.textContent = canRate
+            ? ""
+            : "After you complete the handoff, ask the seller to mark the listing sold and enter your TIP email. This records the exchange; payment happens outside ReSource.";
+        $$("select, button", form).forEach(control => {
+            control.disabled = !canRate;
+        });
+        $$("input[type=radio]", form).forEach(control => {
+            control.disabled = false;
+        });
+        $("#rating-purchase-select").innerHTML = eligiblePurchases.length
+            ? '<option value="" selected disabled>Choose a recorded exchange</option>' +
+                eligiblePurchases.map(purchase =>
+                    `<option value="${Number(purchase.id)}">${escapeHTML(purchase.title)} · ${escapeHTML(formatDate(purchase.purchased_at))}</option>`
+                ).join("")
+            : '<option value="">No exchange recorded yet</option>';
+        const requestedPurchaseId = localStorage.getItem("resource_rating_purchase");
+        if (eligiblePurchases.some(purchase => String(purchase.id) === requestedPurchaseId)) {
+            $("#rating-purchase-select").value = requestedPurchaseId;
+        }
+
+    } catch (error) {
+        summary.textContent = "Ratings are temporarily unavailable.";
+        form.classList.toggle("hidden", isOwnProfile);
+        eligibilityMessage.classList.toggle("hidden", isOwnProfile);
+        eligibilityMessage.textContent = "Ratings could not be loaded. Try again later.";
+        $$("select, input[type=radio], button", form).forEach(control => {
+            control.disabled = true;
+        });
+    }
+}
+
+function renderProfileListings(listings) {
+
+
+const grid =
+    $("#profile-listings-grid");
+
+
+grid.innerHTML = "";
+
+
+if (!listings.length) {
+
+    grid.innerHTML = `
+
+        <div
+            class="empty-state"
+            style="grid-column:1 / -1;">
+
+            <div class="empty-icon">
+                +
+            </div>
+
+            <h3>
+                No listings yet
+            </h3>
+
+            <p>
+                You have not posted anything yet.
+            </p>
+
+            <button
+                class="btn btn-yellow"
+                id="profile-create-btn">
+
+                Create your first listing
+
+            </button>
+
+        </div>
+
+    `;
+
+
+    $("#profile-create-btn")
+        .addEventListener(
+            "click",
+            () => goToPage("create")
+        );
+
+
+    return;
+
+}
+
+
+listings.forEach(listing => {
+
+    const card =
+        document.createElement("div");
+
+
+    card.className =
+        "listing-card";
+
+
+    card.innerHTML = `
+
+        <img
+            src="${escapeHTML(
+                mediaUrl(listing.image) ||
+                FALLBACK_IMAGE
+            )}"
+            alt="${escapeHTML(
+                listing.title
+            )}">
+
+
+        <div class="lc-title">
+            ${escapeHTML(
+                listing.title
+            )}
+        </div>
+
+
+        <div class="lc-bottom">
+
+            <span>
+                ${peso(listing.price)}
+            </span>
+
+            <span class="status ${listing.status === "draft" ? "pending" : listing.status === "hidden" ? "rejected" : escapeHTML(listing.status || "active")}">
+                ${listing.status === "draft" ? "Pending review" : listing.status === "hidden" ? "Rejected" : "Active"}
+            </span>
+
+        </div>
+
+        ${listing.status === "hidden" && listing.rejection_reason ? `
+            <p class="listing-rejection-reason">
+                Reason: ${escapeHTML(listing.rejection_reason)}
+            </p>
+        ` : ""}
+
+    `;
+
+
+    const profileImage = $("img", card);
+
+    profileImage.addEventListener(
+        "click",
+        event => {
+            event.stopPropagation();
+            openImageViewer(profileImage.src, listing.title || "Listing image");
+        }
+    );
+
+
+    card.addEventListener(
+        "click",
+        () => {
+
+            localStorage.setItem(
+                "resource_selected_listing",
+                listing.id
+            );
+
+            goToPage("listing");
+
+        }
+    );
+
+
+    grid.appendChild(card);
+
+});
+
+
+}
+
+function renderProfileSoldItems(listings) {
+
+const grid = $("#profile-sold-grid");
+
+if (!grid) return;
+
+if (!listings.length) {
+    grid.innerHTML = `
+        <div class="empty-state" style="grid-column:1 / -1;">
+            <div class="empty-icon">✓</div>
+            <h3>No sold items yet</h3>
+            <p>Listings marked as sold through checkout will appear here.</p>
+        </div>
+    `;
+    return;
+}
+
+grid.innerHTML = "";
+
+listings.forEach(listing => {
+    const card = document.createElement("div");
+    const soldDate = formatDate(listing.soldAt || listing.createdAt);
+
+    card.className = "listing-card";
+    card.innerHTML = `
+        <img src="${escapeHTML(mediaUrl(listing.image) || FALLBACK_IMAGE)}" alt="${escapeHTML(listing.title)}">
+        <div class="lc-title">${escapeHTML(listing.title)}</div>
+        <div class="lc-bottom">
+            <span>${peso(listing.price)}</span>
+            <span class="status sold">Sold ${escapeHTML(soldDate)}</span>
+        </div>
+    `;
+
+    const image = $("img", card);
+    image.addEventListener("click", event => {
+        event.stopPropagation();
+        openImageViewer(image.src, listing.title || "Sold listing image");
+    });
+
+    card.addEventListener("click", () => {
+        localStorage.setItem("resource_selected_listing", listing.id);
+        goToPage("listing");
+    });
+
+    grid.appendChild(card);
+});
+
+}
+
+function renderPurchaseHistory(user) {
+
+const area = $("#purchase-history-list");
+
+if (!area) return;
+
+const purchases = getPurchases()
+    .filter(purchase => purchase.buyerId === user.id)
+    .sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt));
+
+if (!purchases.length) {
+    area.innerHTML = `
+        <div class="empty-state">
+            <div class="empty-icon">◫</div>
+            <h3>No purchase history yet</h3>
+            <p>Completed cart purchases will be recorded here.</p>
+        </div>
+    `;
+    return;
+}
+
+area.innerHTML = purchases.map(purchase => `
+    <article class="purchase-history-row">
+        <button
+            class="purchase-image-button"
+            type="button"
+            data-purchase-preview="${escapeHTML(mediaUrl(purchase.image) || FALLBACK_IMAGE)}"
+            data-purchase-caption="${escapeHTML(purchase.title)}">
+                <img src="${escapeHTML(mediaUrl(purchase.image) || FALLBACK_IMAGE)}" alt="${escapeHTML(purchase.title)}">
+        </button>
+        <div class="purchase-history-info">
+            <button type="button" class="purchase-title" data-purchase-open="${escapeHTML(purchase.listingId)}">${escapeHTML(purchase.title)}</button>
+            <p>${Number(purchase.quantity || 1)} item${Number(purchase.quantity || 1) === 1 ? "" : "s"} · ${formatDate(purchase.purchasedAt)}</p>
+        </div>
+        <div class="purchase-history-total">
+            <strong>${peso(Number(purchase.price || 0) * Number(purchase.quantity || 1))}</strong>
+            <span>Completed</span>
+        </div>
+    </article>
+`).join("");
+
+$$('[data-purchase-preview]', area).forEach(button => {
+    button.addEventListener("click", () =>
+        openImageViewer(button.dataset.purchasePreview, button.dataset.purchaseCaption)
+    );
+});
+
+$$('[data-purchase-open]', area).forEach(button => {
+    button.addEventListener("click", () => {
+        localStorage.setItem("resource_selected_listing", button.dataset.purchaseOpen);
+        goToPage("listing");
+    });
+});
+
+}
+
+function showProfileTab(tabName) {
+
+const tab = $(`.ptab[data-tab="${tabName}"]`);
+const panel = $(`#panel-${tabName}`);
+
+if (!tab || !panel) return;
+
+$$(".ptab").forEach(item => item.classList.remove("active"));
+$$(".profile-panel").forEach(item => item.classList.add("hidden"));
+
+tab.classList.add("active");
+panel.classList.remove("hidden");
+
+}
+
+/* ==========================================================
+MESSAGING
+========================================================== */
+
+let selectedConversationUserId =
+null;
+let selectedConversationListingId = null;
+
+let remoteMessagesLoaded = false;
+let remoteMessagesLoading = false;
+let remoteMessagesRefreshRequested = false;
+
+async function refreshRemoteMessages(force = false) {
+    if (!getCurrentUser() || (remoteMessagesLoaded && !force)) return;
+    if (remoteMessagesLoading) {
+        remoteMessagesRefreshRequested ||= force;
+        return;
+    }
+
+    remoteMessagesLoading = true;
+    try {
+        const response = await fetch("../backend/php/messages/conversations.php", {
+            headers: { Accept: "application/json" }
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success || !Array.isArray(result.users)) return;
+
+        const remoteUsers = result.users.map(user => ({
+            id: String(user.id),
+            firstName: user.first_name || "",
+            middleName: user.middle_name || "",
+            lastName: user.last_name || "",
+            course: user.course || "",
+            campus: user.campus || "",
+            profilePhoto: mediaUrl(user.profile_photo || "")
+        }));
+        const usersById = new Map(getUsers().map(user => [String(user.id), user]));
+        remoteUsers.forEach(user => {
+            usersById.set(user.id, { ...usersById.get(user.id), ...user });
+        });
+        saveUsers([...usersById.values()]);
+
+        const messagesByPartner = await Promise.all(remoteUsers.map(async partner => {
+            const messageResponse = await fetch(
+                `../backend/php/messages/get.php?partner_id=${encodeURIComponent(partner.id)}`,
+                { headers: { Accept: "application/json" } }
+            );
+            const messageResult = await messageResponse.json();
+            if (!messageResponse.ok || !messageResult.success) return [];
+
+            return (messageResult.messages || []).map(message => ({
+                id: `server_${message.id}`,
+                serverMessageId: String(message.id),
+                senderId: String(message.sender_id),
+                receiverId: String(message.receiver_id),
+                listingId: message.listing_id ? String(message.listing_id) : null,
+                text: message.message,
+                createdAt: message.created_at
+            }));
+        }));
+
+        const localMessages = getMessages().filter(message => !message.serverMessageId);
+        saveMessages([...localMessages, ...messagesByPartner.flat()]);
+    } catch {
+    } finally {
+        remoteMessagesLoading = false;
+        remoteMessagesLoaded = true;
+        renderMessaging();
+        if (remoteMessagesRefreshRequested) {
+            remoteMessagesRefreshRequested = false;
+            remoteMessagesLoaded = false;
+            refreshRemoteMessages(true);
+        }
+    }
+}
+
+function getConversationKey(
+userA,
+userB
+) {
+
+
+return [
+    userA,
+    userB
+]
+    .sort()
+    .join("__");
+
+
+}
+
+function getConversationListingId(partnerId) {
+    const currentId = getCurrentUserId();
+    return getMessages()
+        .filter(message =>
+            ((String(message.senderId) === String(currentId) && String(message.receiverId) === String(partnerId)) ||
+                (String(message.receiverId) === String(currentId) && String(message.senderId) === String(partnerId))) &&
+            message.listingId
+        )
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0]?.listingId || null;
+}
+
+function getConversationParticipants() {
+
+
+const current =
+    getCurrentUser();
+
+
+if (!current) return [];
+
+
+const users =
+    getUsers().filter(
+        user =>
+            user.id !== current.id
+    );
+
+
+const messages =
+    getMessages();
+
+
+const userIdsWithMessages =
+    new Set();
+
+
+messages.forEach(message => {
+
+    if (
+        message.senderId ===
+        current.id
+    ) {
+
+        userIdsWithMessages.add(
+            message.receiverId
+        );
+
+    }
+
+
+    if (
+        message.receiverId ===
+        current.id
+    ) {
+
+        userIdsWithMessages.add(
+            message.senderId
+        );
+
+    }
+
+});
+
+
+return users
+
+    .filter(
+        user =>
+            userIdsWithMessages.has(
+                user.id
+            )
+    )
+
+    .sort(
+        (a, b) =>
+            getUserDisplayName(a)
+                .localeCompare(
+                    getUserDisplayName(b)
+                )
+    );
+
+
+}
+
+function renderMessaging() {
+
+
+const current =
+    getCurrentUser();
+
+
+const warning =
+    $("#message-login-warning");
+
+
+const content =
+    $("#messaging-content");
+
+
+if (!current) {
+
+    warning.classList.remove("hidden");
+
+    content.classList.add("hidden");
+
+    return;
+
+}
+
+
+warning.classList.add("hidden");
+
+content.classList.remove("hidden");
+
+
+const partners =
+    getConversationParticipants();
+
+
+const search =
+    (
+        $("#conversation-search")
+            .value ||
+        ""
+    )
+        .trim()
+        .toLowerCase();
+
+
+const filtered =
+    partners.filter(
+        partner =>
+            getUserDisplayName(partner)
+                .toLowerCase()
+                .includes(search)
+    );
+
+
+const list =
+    $("#conversation-items");
+
+
+list.innerHTML = "";
+
+
+if (!filtered.length) {
+
+    list.innerHTML = `
+
+        <div
+            class="empty-state"
+            style="
+                margin:12px;
+                padding:20px 10px;
+                border:none;
+            ">
+
+            No conversations yet.
+
+            <br>
+
+            Message a seller from a listing.
+
+        </div>
+
+    `;
+
+} else {
+
+    filtered.forEach(partner => {
+
+        const messages =
+            getMessages()
+
+                .filter(message =>
+
+                    (
+                        message.senderId ===
+                        current.id &&
+
+                        message.receiverId ===
+                        partner.id
+                    )
+
+                    ||
+
+                    (
+                        message.receiverId ===
+                        current.id &&
+
+                        message.senderId ===
+                        partner.id
+                    )
+
+                )
+
+                .sort(
+                    (a, b) =>
+                        new Date(a.createdAt) -
+                        new Date(b.createdAt)
+                );
+
+
+        const last =
+            messages[messages.length - 1];
+
+        const lastPreview = /^\[\[RESOURCE_RATE_SELLER:\d+\]\]$/.test(last?.text || "")
+            ? String(last.receiverId) === String(current.id)
+                ? "Your exchange is complete. Rate the seller."
+                : "Exchange recorded."
+            : last?.text || "Start a conversation";
+
+
+        const item =
+            document.createElement("div");
+
+
+        item.className =
+            `convo-item ${
+                selectedConversationUserId ===
+                partner.id
+                    ? "active"
+                    : ""
+            }`;
+
+
+        item.innerHTML = `
+
+            <div class="avatar">
+                👤
+            </div>
+
+            <div style="min-width:0;">
+
+                <div class="convo-name">
+                    ${escapeHTML(
+                        getUserDisplayName(partner)
+                    )}
+                </div>
+
+                <div class="convo-preview">
+                    ${escapeHTML(
+                        lastPreview
+                    )}
+                </div>
+
+            </div>
+
+        `;
+
+
+        item.addEventListener(
+            "click",
+            () => {
+
+                selectedConversationUserId =
+                    partner.id;
+                selectedConversationListingId = getConversationListingId(partner.id);
+
+                renderMessaging();
+
+            }
+        );
+
+
+        list.appendChild(item);
+
+    });
+
+}
+
+
+const currentPartner =
+    getUsers().find(
+        user =>
+            user.id ===
+            selectedConversationUserId
+    );
+
+
+renderChat(
+    currentPartner ||
+    null
+);
+
+if (!remoteMessagesLoaded && !remoteMessagesLoading) {
+    refreshRemoteMessages();
+}
+
+
+}
+
+function renderChat(partner) {
+
+
+const current =
+    getCurrentUser();
+
+
+if (!partner || !current) {
+
+    $("#chat-partner-name")
+        .textContent =
+        "Select a conversation";
+
+
+    $("#chat-partner-status")
+        .textContent = "";
+
+
+    $("#chat-body").innerHTML = `
+
+        <div class="empty-state">
+            Select a conversation to start messaging.
+        </div>
+
+    `;
+
+
+    return;
+
+}
+
+
+$("#chat-partner-name")
+    .textContent =
+    getUserDisplayName(partner);
+
+const conversationListing = getListings().find(
+    item => String(item.id) === String(selectedConversationListingId)
+);
+
+$("#chat-partner-status")
+    .textContent =
+    conversationListing
+        ? `Discussing: ${conversationListing.title}`
+        : "TIPian";
+
+
+const messages =
+    getMessages()
+
+        .filter(message =>
+
+            (
+                message.senderId ===
+                current.id &&
+
+                message.receiverId ===
+                partner.id
+            )
+
+            ||
+
+            (
+                message.receiverId ===
+                current.id &&
+
+                message.senderId ===
+                partner.id
+            )
+
+        )
+
+        .sort(
+            (a, b) =>
+                new Date(a.createdAt) -
+                new Date(b.createdAt)
+        );
+
+
+const body =
+    $("#chat-body");
+
+
+body.innerHTML = "";
+
+
+if (!messages.length) {
+
+    body.innerHTML = `
+
+        <div
+            class="empty-state"
+            style="
+                margin:auto;
+                border:none;
+            ">
+
+            Say hi to
+            ${escapeHTML(
+                getUserFirstName(partner)
+            )}!
+
+        </div>
+
+    `;
+
+} else {
+
+    messages.forEach(message => {
+
+        const mine =
+            message.senderId ===
+            current.id;
+
+
+        const row =
+            document.createElement("div");
+
+
+        row.className =
+            `msg-row ${
+                mine
+                    ? "right"
+                    : "left"
+            }`;
+
+        const ratingPrompt = message.text.match(/^\[\[RESOURCE_RATE_SELLER:(\d+)\]\]$/);
+        const ratingReceipt = message.text.match(/^\[\[RESOURCE_SELLER_RATED:(\d+)\]\]$/);
+        const isBuyerPrompt = ratingPrompt &&
+            String(message.receiverId) === String(current.id) &&
+            String(message.senderId) === String(partner.id);
+        const isBuyerReceipt = ratingReceipt &&
+            String(message.receiverId) === String(current.id) &&
+            String(message.senderId) === String(partner.id);
+
+        row.innerHTML = ratingPrompt || ratingReceipt
+            ? `
+                <div class="msg-bubble ${mine ? "yellow" : "gray"}">
+                    ${isBuyerPrompt
+                        ? `Your exchange is complete. How was your purchase from ${escapeHTML(getUserDisplayName(partner))}?
+                            <button type="button" class="btn btn-yellow" data-rate-seller="${escapeHTML(partner.id)}" data-rate-purchase="${ratingPrompt[1]}">Rate seller</button>
+                            <form class="message-rating-form hidden" data-purchase-id="${ratingPrompt[1]}" data-reviewee-id="${escapeHTML(partner.id)}">
+                                <label for="message-rating-${ratingPrompt[1]}">Your rating</label>
+                                <select id="message-rating-${ratingPrompt[1]}" name="rating" required>
+                                    <option value="">Choose stars</option>
+                                    <option value="5">★★★★★ — Excellent</option>
+                                    <option value="4">★★★★ — Good</option>
+                                    <option value="3">★★★ — Okay</option>
+                                    <option value="2">★★ — Poor</option>
+                                    <option value="1">★ — Very poor</option>
+                                </select>
+                                <button type="submit" class="btn btn-yellow">Submit rating</button>
+                            </form>`
+                        : isBuyerReceipt
+                            ? "Thanks for rating this seller."
+                            : "Exchange recorded."}
+                </div>
+                <div class="msg-time">${formatTime(message.createdAt)}</div>
+            `
+            : `
+
+            <div
+                class="msg-bubble ${
+                    mine
+                        ? "yellow"
+                        : "gray"
+                }">
+
+                ${escapeHTML(
+                    message.text
+                )}
+
+            </div>
+
+            <div class="msg-time">
+
+                ${formatTime(
+                    message.createdAt
+                )}
+
+            </div>
+
+        `;
+
+
+        body.appendChild(row);
+
+    });
+
+
+    body.scrollTop =
+        body.scrollHeight;
+
+}
+
+
+}
+
+function openConversationWith(userId, listingId = null) {
+
+
+if (!requireLogin()) return;
+
+
+if (
+    userId ===
+    getCurrentUserId()
+) {
+
+    toast(
+        "You cannot message yourself.",
+        "error"
+    );
+
+    return;
+
+}
+
+
+selectedConversationUserId =
+    userId;
+selectedConversationListingId = listingId || getConversationListingId(userId);
+
+
+goToPage("messaging");
+
+
+}
+
+/* ==========================================================
+EVENTS
+========================================================== */
+
+document.addEventListener(
+"DOMContentLoaded",
+() => {
+
+
+    /* PRELOADER */
+
+    setTimeout(() => {
+
+        const pre =
+            $("#preloader");
+
+
+        if (pre) {
+
+            pre.style.transition =
+                "opacity 300ms ease";
+
+
+            pre.style.opacity = "0";
+
+
+            setTimeout(
+                () => pre.remove(),
+                320
+            );
+
+        }
+
+    }, 350);
+
+
+    /* INITIAL RENDER */
+    sanitizeBlockedListings();
+    renderAll();
+    const requestedPage = new URLSearchParams(window.location.search).get("page");
+    const availablePages = ["login", "dashboard", "browse", "saved", "listing", "create", "messaging", "profile"];
+    if (availablePages.includes(requestedPage)) {
+        goToPage(requestedPage);
+    } else if (getCurrentUser()) {
+        goToPage("dashboard");
+    } else {
+        goToPage("login");
+    }
+    syncRemoteListings();
+
+    /* SIDEBAR NAVIGATION */
+
+    $("#menu-toggle-btn")
+        .addEventListener(
+            "click",
+            toggleNavigationMenu
+        );
+
+    $("#sidebar-close-btn")
+        .addEventListener(
+            "click",
+            closeNavigationMenu
+        );
+
+    $("#sidebar-overlay")
+        .addEventListener(
+            "click",
+            closeNavigationMenu
+        );
+
+    document.addEventListener(
+        "keydown",
+        event => {
+            if (event.key === "Escape") {
+                closeNavigationMenu();
+            }
+        }
+    );
+
+    $$(".nav-item")
+        .forEach(link => {
+
+            link.addEventListener(
+                "click",
+                event => {
+
+                    event.preventDefault();
+
+
+                    const page =
+                        link.dataset.page;
+
+
+                    if (page === "admin-reports") {
+
+                        if (getCurrentUser()?.role !== "admin") {
+                            toast("Administrator access required.", "error");
+                            return;
+                        }
+
+                        window.location.href = "admin-dashboard.php#dashboard";
+                        return;
+                    }
+
+
+                    if (
+                        page === "create" &&
+                        !requireLogin()
+                    ) return;
+
+
+                    goToPage(page);
+
+                }
+            );
+
+        });
+
+
+    /* TOP HEADER NAVIGATION */
+
+    $$(".header-nav-link")
+        .forEach(link => {
+
+            link.addEventListener(
+                "click",
+                () => {
+
+                    const page =
+                        link.dataset.headerPage;
+
+
+                    if (
+                        page === "create" &&
+                        !requireLogin()
+                    ) return;
+
+
+                    goToPage(page);
+
+                }
+            );
+
+        });
+
+
+    /* HEADER BRAND */
+
+    $$(".header-brand")
+        .forEach(brand => {
+
+            brand.addEventListener(
+                "click",
+                () =>
+                    goToPage("dashboard")
+            );
+
+        });
+
+
+    /* GENERIC DATA-GOTO */
+
+    $$("[data-goto]")
+        .forEach(el => {
+
+            el.addEventListener(
+                "click",
+                event => {
+
+                    event.preventDefault();
+
+
+                    const page =
+                        el.dataset.goto;
+
+
+                    if (page === "profile") {
+                        localStorage.removeItem("resource_profile_user");
+                    }
+
+
+                    if (
+                        page === "create" &&
+                        !requireLogin()
+                    ) return;
+
+
+                    goToPage(page);
+
+
+                    if (
+                        el.dataset.authTab
+                    ) {
+
+                        switchAuthTab(
+                            el.dataset.authTab
+                        );
+
+                    }
+
+                }
+            );
+
+        });
+
+
+    /* CATEGORY FILTERS */
+
+    $$(".category-item")
+        .forEach(category => {
+
+            category.addEventListener(
+                "click",
+                () => {
+
+                    $("#filter-category")
+                        .value =
+                        category.dataset.category ||
+                        "";
+
+
+                    goToPage("browse");
+
+                    renderBrowse();
+
+                }
+            );
+
+        });
+
+
+    /* AUTH TABS */
+
+    $("#tab-login")
+        .addEventListener(
+            "click",
+            () =>
+                switchAuthTab("login")
+        );
+
+
+    $("#tab-signup")
+        .addEventListener(
+            "click",
+            () =>
+                switchAuthTab("signup")
+        );
+
+    $("#back-to-login-btn").addEventListener("click", () => {
+        $("#login-verification-box").classList.add("hidden");
+        switchAuthTab("login");
+    });
+
+
+    /* TERMS AND CONDITIONS */
+
+    const termsModal = $("#terms-modal");
+
+    const closeTermsModal = () =>
+        termsModal.classList.add("hidden");
+
+    $("#open-terms-btn")
+        .addEventListener(
+            "click",
+            () => termsModal.classList.remove("hidden")
+        );
+
+    $("#close-terms-btn")
+        .addEventListener("click", closeTermsModal);
+
+    $("#terms-done-btn")
+        .addEventListener("click", closeTermsModal);
+
+    termsModal.addEventListener(
+        "click",
+        event => {
+            if (event.target === termsModal) {
+                closeTermsModal();
+            }
+        }
+    );
+
+    document.addEventListener(
+        "keydown",
+        event => {
+            if (event.key === "Escape") {
+                closeTermsModal();
+            }
+        }
+    );
+
+
+    /* IMAGE PREVIEW */
+
+    const imageLightbox = $("#image-lightbox");
+
+    $("#image-lightbox-close")
+        .addEventListener("click", closeImageViewer);
+
+    imageLightbox.addEventListener(
+        "click",
+        event => {
+            if (event.target === imageLightbox) {
+                closeImageViewer();
+            }
+        }
+    );
+
+    document.addEventListener(
+        "keydown",
+        event => {
+            if (event.key === "Escape") {
+                closeImageViewer();
+            }
+        }
+    );
+
+
+    /* PASSWORD VISIBILITY */
+
+    $("#toggle-password")
+        .addEventListener(
+            "click",
+            () => {
+
+                const input =
+                    $("#login-password");
+
+
+                const visible =
+                    input.type ===
+                    "password";
+
+
+                input.type =
+                    visible
+                        ? "text"
+                        : "password";
+
+
+                $("#toggle-password")
+                    .textContent =
+                    visible
+                        ? "🙈"
+                        : "👁";
+
+            }
+        );
+
+
+    /* LOGIN */
+
+   $("#login-form").addEventListener("submit", async event => {
+
+    event.preventDefault();
+    const loginButton = $("#login-form").querySelector(
+    'button[type="submit"]'
+);
+const restoreLoginButton = () => {
+    if (!loginButton) return;
+    loginButton.disabled = false;
+    loginButton.textContent = "Log In";
+};
+
+if (loginButton) {
+    loginButton.disabled = true;
+    loginButton.textContent = "Signing in...";
+}
+
+    const email = $("#login-email")
+        .value
+        .trim()
+        .toLowerCase();
+
+    const password = $("#login-password").value;
+
+    const role = $("#login-role").value;
+
+    if (!validateTipEmail(email)) {
+        toast(
+            "Please use your TIP institutional email.",
+            "error"
+        );
+        restoreLoginButton();
+        return;
+    }
+
+    const formData = new URLSearchParams({
+        email,
+        password,
+        role
+    });
+
+    let response;
+    let result;
+
+    try {
+
+        response = await fetch("../backend/php/auth/login.php", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: formData
+        });
+
+        result = await response.json();
+
+    } catch (error) {
+
+        toast(
+            "The server is unavailable. Please try again.",
+            "error"
+        );
+        restoreLoginButton();
+
+        return;
+    }
+
+    if (!response.ok || !result.success) {
+
+        toast(
+            result.message || "Unable to log in.",
+            "error"
+        );
+        restoreLoginButton();
+
+        return;
+    }
+
+    /*
+     * PASSWORD IS CORRECT.
+     *
+     * BUT WE DO NOT LOG THE USER IN YET.
+     * We wait for the Gmail verification code.
+     */
+
+   if (result.requires_2fa) {
+
+    $("#login-form").classList.add("hidden");
+
+    $("#login-verification-box").classList.remove("hidden");
+    $("#page-login").classList.add("verification-only");
+
+    $("#verification-code").value = "";
+    $("#verification-code").disabled = true;
+    $("#verification-form").querySelector('button[type="submit"]').disabled = true;
+    $("#login-verification-status").textContent = "Sending your verification code...";
+
+    await new Promise(resolve => requestAnimationFrame(resolve));
+
+    try {
+        const sendResponse = await fetch("../backend/php/auth/send-login-verification.php", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams()
+        });
+        const sendResult = await sendResponse.json();
+
+        if (!sendResponse.ok || !sendResult.success) {
+            $("#login-verification-status").textContent = sendResult.message || "Could not send your verification code.";
+            toast(sendResult.message || "Could not send your verification code.", "error");
+            return;
+        }
+
+        $("#login-verification-status").textContent = "A 6-digit code was sent to your TIP email. Enter it below to continue.";
+        $("#verification-code").disabled = false;
+        $("#verification-form").querySelector('button[type="submit"]').disabled = false;
+        $("#verification-code").focus();
+        toast(sendResult.message);
+    } catch (error) {
+        $("#login-verification-status").textContent = "The server could not send your verification code. Please go back and try again.";
+        toast("The server is unavailable. Please try again.", "error");
+    }
+
+    return;
+}
+
+
+/*
+ * Admin accounts do not require 2FA.
+ */
+if (result.user) {
+
+    const user = {
+
+        id: String(result.user.id),
+
+        firstName: result.user.first_name,
+
+        middleName:
+            result.user.middle_name || "",
+
+        lastName:
+            result.user.last_name,
+
+        name: [
+            result.user.first_name,
+            result.user.middle_name,
+            result.user.last_name
+        ]
+            .filter(Boolean)
+            .join(" "),
+
+        studentId:
+            result.user.student_id,
+
+        email:
+            result.user.email,
+
+        course:
+            result.user.course,
+
+        campus:
+            result.user.campus,
+
+        role:
+            result.user.role,
+
+        profilePhoto:
+            result.user.profile_photo || ""
+
+    };
+
+    const users =
+        getUsers().filter(
+            account => account.id !== user.id
+        );
+
+    users.push(user);
+
+    saveUsers(users);
+
+    localStorage.setItem(
+        STORAGE.session,
+        user.id
+    );
+
+    toast(
+        `Welcome back, ${getUserFirstName(user)}!`
+    );
+
+    renderAll();
+
+    if (user.role === "admin") {
+
+        window.location.href =
+            "admin-dashboard.php";
+
+    } else {
+
+        goToPage("dashboard");
+
+    }
+
+    return;
+}
+
+});
+
+
+    /* SIGNUP */
+
+   $("#signup-form").addEventListener("submit", async event => {
+
+    event.preventDefault();
+
+    const firstName =
+        $("#signup-first-name").value.trim();
+
+    const middleName =
+        $("#signup-middle-name").value.trim();
+
+    const lastName =
+        $("#signup-last-name").value.trim();
+
+    const studentId =
+        $("#signup-student-id").value.trim();
+
+    const email =
+        $("#signup-email")
+            .value
+            .trim()
+            .toLowerCase();
+
+    const password =
+        $("#signup-password").value;
+
+    const password2 =
+        $("#signup-password2").value;
+
+    const course =
+        $("#signup-course").value.trim();
+
+    const campus =
+        $("#signup-campus").value;
+
+    const terms =
+        $("#signup-terms").checked;
+
+
+    /* =========================
+       VALIDATION
+       ========================= */
+
+    if (
+        !firstName ||
+        !lastName ||
+        !studentId ||
+        !email ||
+        !password ||
+        !password2 ||
+        !course ||
+        !campus
+    ) {
+
+        toast(
+            "Please complete all required fields.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    if (!validateStudentId(studentId)) {
+
+        toast(
+            "Please enter a valid Student ID.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    if (!validateTipEmail(email)) {
+
+        toast(
+            "Only @tip.edu.ph emails are allowed.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    if (password.length < 6) {
+
+        toast(
+            "Password must be at least 6 characters.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    if (password !== password2) {
+
+        toast(
+            "Passwords do not match.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    if (!terms) {
+
+        toast(
+            "Please agree to the Terms and Conditions.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    /* =========================
+       CREATE ACCOUNT
+       ========================= */
+
+    let response;
+    let result;
+
+    try {
+
+        response = await fetch(
+            "../backend/php/auth/register.php",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/x-www-form-urlencoded"
+                },
+
+                body: new URLSearchParams({
+                    first_name: firstName,
+                    middle_name: middleName,
+                    last_name: lastName,
+                    student_id: studentId,
+                    email,
+                    password,
+                    password2,
+                    course,
+                    campus
+                })
+            }
+        );
+
+        result = await response.json();
+
+    } catch (error) {
+
+        toast(
+            "The server is unavailable. Please try again.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    /* =========================
+       CHECK RESULT
+       ========================= */
+
+    if (!response.ok || !result.success) {
+
+        toast(
+            result.message ||
+            "Unable to create the account.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    /* =========================
+       WAIT FOR EMAIL VERIFICATION
+       ========================= */
+
+    if (result.requires_2fa) {
+
+        $("#signup-form").classList.add("hidden");
+
+        $("#signup-verification-box")
+            .classList.remove("hidden");
+
+        $("#signup-verification-code").value = "";
+        $("#signup-verification-status").textContent = "Preparing your verification email...";
+
+        $("#signup-verification-code").focus();
+        void sendSignupVerificationCode();
+
+        return;
+    }
+
+});
+
+$("#signup-resend-code-btn").addEventListener("click", sendSignupVerificationCode);
+
+
+    /* PASSWORD RESET */
+
+    $("#forgot-password-link").addEventListener("click", event => {
+        event.preventDefault();
+        $("#login-form").classList.add("hidden");
+        $("#login-verification-box").classList.add("hidden");
+        $("#reset-password-box").classList.add("hidden");
+        $("#reset-request-email").value = $("#login-email").value.trim();
+        $("#forgot-password-box").classList.remove("hidden");
+        $("#reset-request-email").focus();
+    });
+
+    $("#back-to-login-from-reset-btn").addEventListener("click", () => {
+        $("#forgot-password-box").classList.add("hidden");
+        $("#login-form").classList.remove("hidden");
+    });
+
+    $("#back-to-reset-request-btn").addEventListener("click", () => {
+        $("#reset-password-box").classList.add("hidden");
+        $("#forgot-password-box").classList.remove("hidden");
+    });
+
+    $("#forgot-password-form").addEventListener("submit", async event => {
+        event.preventDefault();
+
+        const email = $("#reset-request-email").value.trim().toLowerCase();
+        if (!validateTipEmail(email)) {
+            toast("Please use your TIP institutional email.", "error");
+            return;
+        }
+
+        const button = $("#request-reset-code-btn");
+        button.disabled = true;
+        button.textContent = "Sending...";
+
+        try {
+            const response = await fetch("../backend/php/auth/request-password-reset.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({ email })
+            });
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                toast(result.message || "Unable to request a reset code.", "error");
+                return;
+            }
+
+            $("#reset-confirm-email").value = email;
+            $("#password-reset-code").value = "";
+            $("#reset-new-password").value = "";
+            $("#reset-confirm-password").value = "";
+            $("#forgot-password-box").classList.add("hidden");
+            $("#reset-password-box").classList.remove("hidden");
+            $("#password-reset-code").focus();
+            toast(result.message);
+        } catch (error) {
+            toast("The server is unavailable. Please try again.", "error");
+        } finally {
+            button.disabled = false;
+            button.textContent = "Send Reset Code";
+        }
+    });
+
+    $("#reset-password-form").addEventListener("submit", async event => {
+        event.preventDefault();
+
+        const email = $("#reset-confirm-email").value;
+        const code = $("#password-reset-code").value.trim();
+        const password = $("#reset-new-password").value;
+        const confirmPassword = $("#reset-confirm-password").value;
+
+        if (!/^\d{6}$/.test(code)) {
+            toast("Please enter the 6-digit reset code.", "error");
+            return;
+        }
+        if (password.length < 6) {
+            toast("Password must be at least 6 characters.", "error");
+            return;
+        }
+        if (password !== confirmPassword) {
+            toast("Passwords do not match.", "error");
+            return;
+        }
+
+        const button = $("#reset-password-btn");
+        button.disabled = true;
+        button.textContent = "Resetting...";
+
+        try {
+            const response = await fetch("../backend/php/auth/reset-password.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({ email, code, password, confirm_password: confirmPassword })
+            });
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                toast(result.message || "Unable to reset your password.", "error");
+                return;
+            }
+
+            $("#reset-password-form").reset();
+            $("#reset-password-box").classList.add("hidden");
+            $("#login-form").classList.remove("hidden");
+            $("#login-email").value = email;
+            toast(result.message);
+        } catch (error) {
+            toast("The server is unavailable. Please try again.", "error");
+        } finally {
+            button.disabled = false;
+            button.textContent = "Reset Password";
+        }
+    });
+
+
+    /* DASHBOARD SEARCH */
+
+    $("#dashboard-search-input")
+        .addEventListener(
+            "keydown",
+            event => {
+
+                if (
+                    event.key ===
+                    "Enter"
+                ) {
+
+                    $("#browse-search-input")
+                        .value =
+                        event.target.value;
+
+
+                    goToPage("browse");
+
+                    renderBrowse();
+
+                }
+
+            }
+        );
+
+
+    /* BROWSE */
+
+    $("#toggle-filters-btn")
+        .addEventListener(
+            "click",
+            () => {
+                const panel = $("#listing-filters");
+                const button = $("#toggle-filters-btn");
+                const isOpening = panel.classList.contains("is-collapsed");
+
+                panel.classList.toggle("is-collapsed", !isOpening);
+                button.classList.toggle("active", isOpening);
+                button.setAttribute("aria-expanded", String(isOpening));
+            }
+        );
+
+    $("#apply-filter-btn")
+        .addEventListener(
+            "click",
+            renderBrowse
+        );
+
+
+    $("#reset-filter-btn")
+        .addEventListener(
+            "click",
+            resetFilters
+        );
+
+
+    $("#browse-search-input")
+        .addEventListener(
+            "input",
+            renderBrowse
+        );
+
+
+    /* LISTING */
+
+    $("#message-seller-btn")
+        .addEventListener(
+            "click",
+            () => {
+
+                const listingId =
+                    localStorage.getItem(
+                        "resource_selected_listing"
+                    );
+
+
+                const listing =
+                    getListings().find(
+                        item =>
+                            item.id ===
+                            listingId
+                    );
+
+
+                if (!listing) return;
+
+
+                if (!requireLogin())
+                    return;
+
+
+                openConversationWith(
+                    listing.sellerId,
+                    listing.id
+                );
+
+            }
+        );
+
+
+    $("#detail-seller-box")
+        .addEventListener(
+            "click",
+            () => {
+
+                const listingId =
+                    localStorage.getItem(
+                        "resource_selected_listing"
+                    );
+
+
+                const listing =
+                    getListings().find(
+                        item =>
+                            item.id ===
+                            listingId
+                    );
+
+
+                if (!listing) return;
+
+
+                localStorage.setItem(
+                    "resource_profile_user",
+                    listing.sellerId
+                );
+
+
+                goToPage("profile");
+
+            }
+        );
+
+
+    $("#report-listing-btn").addEventListener("click", () => {
+        if (!requireLogin()) return;
+        $("#report-listing-form").classList.remove("hidden");
+        $("#listing-report-reason").focus();
+    });
+
+    $("#cancel-listing-report-btn").addEventListener("click", () => {
+        $("#report-listing-form").reset();
+        $("#report-listing-form").classList.add("hidden");
+    });
+
+    $("#report-listing-form").addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!requireLogin()) return;
+
+        const listingId = localStorage.getItem("resource_selected_listing");
+        const reason = $("#listing-report-reason").value;
+        const description = $("#listing-report-description").value.trim();
+        const button = $("#submit-listing-report-btn");
+        button.disabled = true;
+
+        try {
+            const response = await fetch("../backend/php/reports/create.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({ listing_id: listingId, reason, description })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                toast(result.message || "Unable to submit this report.", "error");
+                return;
+            }
+
+            event.target.reset();
+            event.target.classList.add("hidden");
+            toast(result.message || "Report submitted.");
+        } catch (error) {
+            toast("The server is unavailable. Please try again.", "error");
+        } finally {
+            button.disabled = false;
+        }
+    });
+
+
+    $("#save-item-btn")
+        .addEventListener(
+            "click",
+            () => {
+                const listingId =
+                    localStorage.getItem(
+                        "resource_selected_listing"
+                    );
+
+                toggleSavedItem(listingId);
+
+            }
+        );
+
+
+    $("#mark-sold-btn")
+        .addEventListener(
+            "click",
+            () => {
+                const listingId = localStorage.getItem(
+                    "resource_selected_listing"
+                );
+
+                markListingAsSold(listingId);
+            }
+        );
+
+
+    $("#delete-listing-btn")
+        .addEventListener(
+            "click",
+            async () => {
+                const current = getCurrentUser();
+                const listingId = localStorage.getItem("resource_selected_listing");
+                const listings = getListings();
+                const listing = listings.find(item => item.id === listingId);
+
+                if (!current || !listing || listing.sellerId !== current.id) return;
+                if (!confirm(`Delete "${listing.title}"?`)) return;
+
+                let alreadyRemoved = false;
+                if (/^\d+$/.test(String(listingId))) {
+                    try {
+                        const response = await fetch("../backend/php/listings/delete.php", {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/x-www-form-urlencoded",
+                                Accept: "application/json"
+                            },
+                            body: new URLSearchParams({ listing_id: listingId })
+                        });
+                        const result = await response.json();
+                        if (response.status === 404) {
+                            alreadyRemoved = true;
+                        } else if (!response.ok || !result.success) {
+                            toast(result.message || "Unable to delete the listing.", "error");
+                            return;
+                        }
+                    } catch (error) {
+                        toast("The server is unavailable. The listing was not deleted.", "error");
+                        return;
+                    }
+                }
+
+                saveListings(listings.filter(item => item.id !== listingId));
+                localStorage.removeItem("resource_selected_listing");
+                toast(alreadyRemoved ? "This listing was already removed." : "Listing deleted.");
+                renderAll();
+                goToPage("dashboard");
+            }
+        );
+
+
+    /* CREATE LISTING */
+
+    $("#create-listing-form")
+        .addEventListener(
+            "submit",
+            async event => {
+
+                event.preventDefault();
+
+
+                const user =
+                    getCurrentUser();
+
+
+                if (!user) {
+
+                    requireLogin();
+
+                    return;
+
+                }
+
+
+                const title =
+                    $("#create-title")
+                        .value
+                        .trim();
+
+
+                const courseCode =
+                    $("#create-coursecode")
+                        .value
+                        .trim();
+
+
+                const department =
+                    $("#create-department")
+                        .value
+                        .trim() ||
+                    user.course;
+
+
+                const category =
+                    $("#create-category")
+                        .value;
+
+
+                const condition =
+                    $("#create-condition")
+                        .value;
+
+
+                const price =
+                    Number(
+                        $("#create-price")
+                            .value
+                    );
+
+
+                const description =
+                    $("#create-description")
+                        .value
+                        .trim();
+
+
+                const campus =
+                    $("#create-campus")
+                        .value;
+
+
+                if (
+                    !title ||
+                    !category ||
+                    !condition ||
+                    !description ||
+                    !Number.isFinite(price) ||
+                    price <= 0
+                ) {
+
+                    toast(
+                        "Please complete all required listing fields.",
+                        "error"
+                    );
+
+                    return;
+
+                }
+
+
+                const formData = new FormData();
+                formData.append("title", title);
+                formData.append("course_code", courseCode);
+                formData.append("department", department);
+                formData.append("category", category);
+                formData.append("condition", condition);
+                formData.append("price", String(price));
+                formData.append("description", description);
+                formData.append("campus", campus);
+
+                selectedListingFiles
+                    .slice(0, 3)
+                    .forEach(file => formData.append("images[]", file));
+
+                let response;
+                let result;
+
+                try {
+                    response = await fetch("../backend/php/listings/create.php", {
+                        method: "POST",
+                        body: formData
+                    });
+                    result = await response.json();
+                } catch (error) {
+                    toast("The server is unavailable. Please try again.", "error");
+                    return;
+                }
+
+                if (!response.ok || !result.success) {
+                    toast(result.message || "Unable to publish the listing.", "error");
+                    return;
+                }
+
+                const listing = {
+
+                    id:
+                        String(result.listing_id),
+
+                    sellerId:
+                        user.id,
+
+                    sellerName:
+                        getUserDisplayName(
+                            user
+                        ),
+
+                    title,
+
+                    courseCode,
+
+                    department,
+
+                    category,
+
+                    condition,
+
+                    price,
+
+                    description,
+
+                    campus,
+
+                    image:
+                        mediaUrl(result.images?.[0]) ||
+                        FALLBACK_IMAGE,
+
+                    images:
+                        result.images?.length
+                            ? result.images.slice(0, 3).map(mediaUrl)
+                            : [FALLBACK_IMAGE],
+
+                    status: result.status || "draft",
+
+                    createdAt:
+                        new Date()
+                            .toISOString()
+
+                };
+
+
+                const listings =
+                    getListings();
+
+
+                listings.push(
+                    listing
+                );
+
+
+                saveListings(
+                    listings
+                );
+
+
+                toast(
+                    "Listing submitted for admin approval."
+                );
+
+
+                resetCreateForm();
+
+                renderAll();
+
+                goToPage("profile");
+                showProfileTab("listings");
+
+            }
+        );
+
+
+    /* SAVE DRAFT */
+
+    $("#save-draft-btn")
+        .addEventListener(
+            "click",
+            () => {
+
+                if (!requireLogin())
+                    return;
+
+
+                const draft = {
+
+                    id:
+                        createId("draft"),
+
+                    userId:
+                        getCurrentUserId(),
+
+                    title:
+                        $("#create-title")
+                            .value
+                            .trim(),
+
+                    savedAt:
+                        new Date()
+                            .toISOString()
+
+                };
+
+
+                const drafts =
+                    readStorage(
+                        STORAGE.drafts,
+                        []
+                    );
+
+
+                drafts.push(
+                    draft
+                );
+
+
+                writeStorage(
+                    STORAGE.drafts,
+                    drafts
+                );
+
+
+                toast(
+                    "Draft saved in this browser."
+                );
+
+            }
+        );
+
+
+    /* CANCEL CREATE */
+
+    $("#cancel-create-btn")
+        .addEventListener(
+            "click",
+            () => {
+
+                resetCreateForm();
+
+                goToPage("dashboard");
+
+            }
+        );
+
+
+    /* PHOTO INPUTS */
+
+    bindPhotoInputs();
+
+
+    /* PROFILE TABS */
+
+    $$(".ptab")
+        .forEach(tab => {
+
+            tab.addEventListener(
+                "click",
+                () => showProfileTab(tab.dataset.tab)
+            );
+
+        });
+
+
+    /* PROFILE SETTINGS */
+
+    $("#profile-photo-input")
+        .addEventListener(
+            "change",
+            async event => {
+                const file = event.target.files?.[0];
+
+                if (!file) return;
+
+                if (file.size > 1.5 * 1024 * 1024) {
+                    toast("Please choose a photo smaller than 1.5 MB.", "error");
+                    event.target.value = "";
+                    return;
+                }
+
+                try {
+                    const formData = new FormData();
+                    formData.append("photo", file);
+
+                    const response = await fetch("../backend/php/users/upload-photo.php", {
+                        method: "POST",
+                        headers: { Accept: "application/json" },
+                        body: formData
+                    });
+                    const result = await response.json();
+
+                    if (!response.ok || !result.success) {
+                        throw new Error(result.message || "Could not save that photo.");
+                    }
+
+                    updateCurrentUser({ profilePhoto: result.profile_photo });
+                                        updateCurrentUser({ profilePhoto: mediaUrl(result.profile_photo) });
+                    renderAll();
+                    goToPage("profile");
+                    toast(result.message || "Profile photo updated.");
+                } catch (error) {
+                    toast(error.message || "Could not save that photo.", "error");
+                } finally {
+                    event.target.value = "";
+                }
+            }
+        );
+
+
+    $("#profile-update-form")
+        .addEventListener(
+            "submit",
+            async event => {
+                event.preventDefault();
+
+                const profile = {
+                    first_name: $("#profile-first-name-input").value.trim(),
+                    middle_name: $("#profile-middle-name-input").value.trim(),
+                    last_name: $("#profile-last-name-input").value.trim(),
+                    course: $("#profile-course-input").value.trim(),
+                    campus: $("#profile-campus-input").value
+                };
+
+                if (!profile.first_name || !profile.last_name || !profile.course) {
+                    toast("First name, last name, and course are required.", "error");
+                    return;
+                }
+
+                try {
+                    const response = await fetch("../backend/php/users/update.php", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: new URLSearchParams(profile)
+                    });
+                    const result = await response.json();
+
+                    if (!response.ok || !result.success) {
+                        toast(result.message || "Unable to update your profile.", "error");
+                        return;
+                    }
+
+                    updateCurrentUser({
+                        firstName: profile.first_name,
+                        middleName: profile.middle_name,
+                        lastName: profile.last_name,
+                        name: [profile.first_name, profile.middle_name, profile.last_name].filter(Boolean).join(" "),
+                        course: profile.course,
+                        campus: profile.campus
+                    });
+                    renderAll();
+                    showProfileTab("settings");
+                    toast(result.message || "Profile updated.");
+                } catch (error) {
+                    toast("The server is unavailable. Please try again.", "error");
+                }
+            }
+        );
+
+
+    $("#profile-rating-form").addEventListener("submit", async event => {
+        event.preventDefault();
+
+        const revieweeId = localStorage.getItem("resource_profile_user");
+        const purchaseId = $("#rating-purchase-select").value;
+        const rating = $("input[name='profile-rating-value']:checked", event.target)?.value;
+
+        if (!revieweeId || !purchaseId || !rating) {
+            toast("Choose a completed purchase and a rating.", "error");
+            return;
+        }
+
+        const button = $("#submit-profile-rating-btn");
+        button.disabled = true;
+        try {
+            const response = await fetch("../backend/php/users/rate.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                    reviewee_id: revieweeId,
+                    purchase_id: purchaseId,
+                    rating
+                })
+            });
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                toast(result.message || "Unable to submit rating.", "error");
+                return;
+            }
+
+            event.target.reset();
+            $("#profile-rating-stars").dataset.rating = "0";
+            localStorage.removeItem("resource_rating_purchase");
+            await renderProfileRatings(revieweeId, false);
+            toast(result.message || "Rating submitted.");
+        } catch (error) {
+            toast("The server is unavailable. Please try again.", "error");
+        } finally {
+            button.disabled = false;
+        }
+    });
+
+    $("#profile-rating-stars").addEventListener("change", event => {
+        if (event.target.matches("input[type=radio]")) {
+            event.currentTarget.dataset.rating = event.target.value;
+        }
+    });
+
+
+    $("#password-update-form")
+        .addEventListener(
+            "submit",
+            async event => {
+                event.preventDefault();
+
+                const currentPassword = $("#current-password-input").value;
+                const newPassword = $("#new-password-input").value;
+                const confirmPassword = $("#confirm-password-input").value;
+
+                if (newPassword.length < 6) {
+                    toast("Your new password must be at least 6 characters.", "error");
+                    return;
+                }
+
+                if (newPassword !== confirmPassword) {
+                    toast("Your new passwords do not match.", "error");
+                    return;
+                }
+
+                try {
+                    const response = await fetch("../backend/php/users/change-password.php", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/x-www-form-urlencoded"
+                        },
+                        body: new URLSearchParams({
+                            current_password: currentPassword,
+                            new_password: newPassword,
+                            confirm_password: confirmPassword
+                        })
+                    });
+                    const result = await response.json();
+
+                    if (!response.ok || !result.success) {
+                        toast(result.message || "Unable to update your password.", "error");
+                        return;
+                    }
+                } catch (error) {
+                    toast("The server is unavailable. Please try again.", "error");
+                    return;
+                }
+
+                event.target.reset();
+                toast("Password updated.");
+            }
+        );
+
+
+    $("#notification-settings-form")
+        .addEventListener(
+            "submit",
+            async event => {
+                event.preventDefault();
+
+                const settings = {
+                    notify_messages: Number($("#notify-messages").checked),
+                    notify_listings: Number($("#notify-listings").checked)
+                };
+                try {
+                    const response = await fetch("../backend/php/users/update.php", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: new URLSearchParams(settings)
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                        toast(result.message || "Unable to save notification settings.", "error");
+                        return;
+                    }
+                    updateCurrentUser({ notifications: {
+                        messages: !!settings.notify_messages,
+                        listingActivity: !!settings.notify_listings
+                    } });
+                    toast("Notification settings saved.");
+                } catch (error) {
+                    toast("The server is unavailable. Please try again.", "error");
+                }
+            }
+        );
+
+
+    $("#privacy-settings-form")
+        .addEventListener(
+            "submit",
+            async event => {
+                event.preventDefault();
+
+                const settings = {
+                    privacy_photo: Number($("#privacy-photo").checked),
+                    privacy_course: Number($("#privacy-course").checked)
+                };
+                try {
+                    const response = await fetch("../backend/php/users/update.php", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: new URLSearchParams(settings)
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                        toast(result.message || "Unable to save privacy settings.", "error");
+                        return;
+                    }
+                    updateCurrentUser({ privacy: {
+                        showProfilePhoto: !!settings.privacy_photo,
+                        showCourse: !!settings.privacy_course
+                    } });
+                    renderTopHeader();
+                    toast("Privacy settings saved.");
+                } catch (error) {
+                    toast("The server is unavailable. Please try again.", "error");
+                }
+            }
+        );
+
+
+    $("#logout-btn")
+        .addEventListener(
+            "click",
+            logout
+        );
+
+
+    /* MESSAGING */
+
+    $("#conversation-search")
+        .addEventListener(
+            "input",
+            renderMessaging
+        );
+
+    $("#chat-body").addEventListener("click", event => {
+        const rateButton = event.target.closest("[data-rate-seller]");
+        if (!rateButton) return;
+
+        rateButton.classList.add("hidden");
+        const form = rateButton.parentElement.querySelector(".message-rating-form");
+        form?.classList.remove("hidden");
+    });
+
+    $("#chat-body").addEventListener("submit", async event => {
+        const form = event.target.closest(".message-rating-form");
+        if (!form) return;
+        event.preventDefault();
+
+        const rating = form.elements.rating.value;
+        if (!rating) {
+            toast("Choose a star rating first.", "error");
+            return;
+        }
+
+        const submitButton = form.querySelector('button[type="submit"]');
+        submitButton.disabled = true;
+        try {
+            const response = await fetch("../backend/php/users/rate.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                    purchase_id: form.dataset.purchaseId,
+                    reviewee_id: form.dataset.revieweeId,
+                    rating
+                })
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+                throw new Error(result.message || "Unable to submit rating.");
+            }
+
+            toast(result.message || "Seller rating submitted.");
+            remoteMessagesLoaded = false;
+            await refreshRemoteMessages(true);
+        } catch (error) {
+            toast(error.message || "The server is unavailable. Please try again.", "error");
+            submitButton.disabled = false;
+        }
+    });
+
+
+    $("#chat-form")
+        .addEventListener(
+            "submit",
+            async event => {
+
+                event.preventDefault();
+
+
+                const current =
+                    getCurrentUser();
+
+
+                if (
+                    !current ||
+                    !selectedConversationUserId
+                ) {
+
+                    toast(
+                        "Select a conversation first.",
+                        "error"
+                    );
+
+                    return;
+
+                }
+
+
+                const input =
+                    $("#chat-input");
+
+
+                const text =
+                    input.value.trim();
+
+
+                if (!text) return;
+
+                let serverMessageId = null;
+                const databaseConversation = /^\d+$/.test(String(current.id)) &&
+                    /^\d+$/.test(String(selectedConversationUserId));
+                if (databaseConversation) {
+                    try {
+                        const response = await fetch("../backend/php/messages/send.php", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                            body: new URLSearchParams({
+                                receiver_id: selectedConversationUserId,
+                                listing_id: selectedConversationListingId || "",
+                                message: text
+                            })
+                        });
+                        const result = await response.json();
+                        if (!response.ok || !result.success) {
+                            toast(result.message || "Unable to send the message.", "error");
+                            return;
+                        }
+                        serverMessageId = String(result.message_id);
+                    } catch {
+                        toast("The server is unavailable. Please try again.", "error");
+                        return;
+                    }
+                }
+
+
+                const messages =
+                    getMessages();
+
+
+                messages.push({
+
+                    id:
+                        serverMessageId ? `server_${serverMessageId}` : createId("message"),
+
+                    serverMessageId,
+
+                    conversationId:
+                        getConversationKey(
+                            current.id,
+                            selectedConversationUserId
+                        ),
+
+                    senderId:
+                        current.id,
+
+                    receiverId:
+                        selectedConversationUserId,
+
+                    listingId:
+                        selectedConversationListingId,
+
+                    text,
+
+                    createdAt:
+                        new Date()
+                            .toISOString()
+
+                });
+
+
+                saveMessages(
+                    messages
+                );
+
+
+                input.value = "";
+
+
+                if (serverMessageId) {
+                    remoteMessagesLoaded = false;
+                    await refreshRemoteMessages(true);
+                } else {
+                    renderMessaging();
+                }
+
+
+                $("#chat-body")
+                    .scrollTop =
+                    $("#chat-body")
+                        .scrollHeight;
+
+            }
+        );
+
+
+    /* ATTACHMENT PLACEHOLDER */
+
+    $("#attach-image-btn")
+        .addEventListener(
+            "click",
+            () =>
+                $("#hidden-attach-input")
+                    .click()
+        );
+
+
+    $("#hidden-attach-input")
+        .addEventListener(
+            "change",
+            event => {
+
+                const file =
+                    event.target.files?.[0];
+
+
+                if (!file) return;
+
+
+                toast(
+                    "Image attachment is a frontend placeholder. PHP will handle real uploads later."
+                );
+
+
+                event.target.value = "";
+
+            }
+        );
+
+}
+
+
+);
+
+/* ==========================================================
+RENDER ALL
+========================================================== */
+
+function renderAll() {
+
+
+const reportsNav = $("#admin-reports-nav");
+
+if (reportsNav) {
+    reportsNav.classList.toggle(
+        "hidden",
+        getCurrentUser()?.role !== "admin"
+    );
+}
+
+
+renderTopHeader();
+
+renderDashboard();
+
+renderBrowse();
+
+renderSavedItems();
+
+renderListingDetail();
+
+prepareCreatePage();
+
+renderProfile();
+
+renderMessaging();
+
+updateSavedBadge();
+
+
+}
+
+/* ==========================================================
+OPTIONAL DEMO ACCOUNTS
+========================================================== */
+
+function setupDemoAccounts() {
+
+
+const users =
+    getUsers();
+
+
+if (users.length >= 2) {
+
+    toast(
+        "You already have at least two accounts."
+    );
+
+    return;
+
+}
+
+
+const demoUsers = [
+
+    {
+
+        id:
+            createId("user"),
+
+        firstName:
+            "Sabrina",
+
+        middleName:
+            "Alea",
+
+        lastName:
+            "Timbol",
+
+        name:
+            "Sabrina Alea Timbol",
+
+        studentId:
+            "DEMO10001",
+
+        email:
+            "sabrina@tip.edu.ph",
+
+        password:
+            "123456",
+
+        course:
+            "BSIT",
+
+        campus:
+            "Manila",
+
+        createdAt:
+            new Date()
+                .toISOString()
+
+    },
+
+
+    {
+
+        id:
+            createId("user"),
+
+        firstName:
+            "Ritz",
+
+        middleName:
+            "Tan",
+
+        lastName:
+            "Santos",
+
+        name:
+            "Ritz Tan Santos",
+
+        studentId:
+            "DEMO10002",
+
+        email:
+            "ritz@tip.edu.ph",
+
+        password:
+            "123456",
+
+        course:
+            "BSCpE",
+
+        campus:
+            "Manila",
+
+        createdAt:
+            new Date()
+                .toISOString()
+
+    }
+
+];
+
+
+saveUsers([
+    ...users,
+    ...demoUsers
+]);
+
+
+toast(
+    "Demo accounts created. Password: 123456"
+);
+
+
+}
+
+window.setupDemoAccounts =
+setupDemoAccounts;
+
+$("#verification-form").addEventListener("submit", async event => {
+
+    event.preventDefault();
+
+    const code = $("#verification-code")
+        .value
+        .trim();
+
+    if (!/^\d{6}$/.test(code)) {
+
+        toast(
+            "Please enter the 6-digit verification code.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    const formData = new URLSearchParams({
+        code
+    });
+
+
+    let response;
+    let result;
+
+
+    try {
+
+        response = await fetch(
+            "../backend/php/auth/verify-code.php",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type":
+                        "application/x-www-form-urlencoded"
+                },
+                body: formData
+            }
+        );
+
+        result = await response.json();
+
+    } catch (error) {
+
+        toast(
+            "The server is unavailable. Please try again.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    if (!response.ok || !result.success || !result.user) {
+
+        toast(
+            result.message ||
+            "Verification failed.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    /*
+     * VERIFICATION SUCCESSFUL
+     *
+     * NOW we actually log the user in.
+     */
+
+    const user = {
+
+        id: String(result.user.id),
+
+        firstName: result.user.first_name,
+
+        middleName:
+            result.user.middle_name || "",
+
+        lastName:
+            result.user.last_name,
+
+        name: [
+            result.user.first_name,
+            result.user.middle_name,
+            result.user.last_name
+        ]
+            .filter(Boolean)
+            .join(" "),
+
+        studentId:
+            result.user.student_id,
+
+        email:
+            result.user.email,
+
+        course:
+            result.user.course,
+
+        campus:
+            result.user.campus,
+
+        role:
+            result.user.role,
+
+        profilePhoto:
+            result.user.profile_photo || ""
+
+    };
+
+
+    /*
+     * Save user locally
+     */
+
+    const users =
+        getUsers()
+            .filter(
+                account => account.id !== user.id
+            );
+
+    users.push(user);
+
+    saveUsers(users);
+
+
+    /*
+     * THIS IS THE REAL LOGIN
+     */
+
+    localStorage.setItem(
+        STORAGE.session,
+        user.id
+    );
+
+
+    toast(
+        `Welcome back, ${getUserFirstName(user)}!`
+    );
+
+
+    $("#verification-form").reset();
+
+    
+$("#login-verification-box")
+    .classList.add("hidden");
+
+$("#page-login")
+    .classList.remove("verification-only");
+
+renderAll();
+
+
+    /*
+     * Redirect according to account type
+     */
+
+    if (user.role === "admin") {
+
+        window.location.href =
+            "admin-dashboard.php";
+
+    } else {
+
+        goToPage("dashboard");
+
+    }
+
+});
+
+$("#signup-verification-form").addEventListener("submit", async event => {
+
+    event.preventDefault();
+
+    const code =
+        $("#signup-verification-code")
+            .value
+            .trim();
+
+
+    /* =========================
+       CHECK CODE FORMAT
+       ========================= */
+
+    if (!/^\d{6}$/.test(code)) {
+
+        toast(
+            "Please enter the 6-digit verification code.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    /* =========================
+       SEND CODE TO PHP
+       ========================= */
+
+    const formData =
+        new URLSearchParams({
+            code
+        });
+
+
+    let response;
+    let result;
+
+
+    try {
+
+        response = await fetch(
+            "../backend/php/auth/verify-code.php",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/x-www-form-urlencoded"
+                },
+
+                body: formData
+            }
+        );
+
+        result = await response.json();
+
+    } catch (error) {
+
+        toast(
+            "The server is unavailable. Please try again.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    /* =========================
+       CHECK VERIFICATION
+       ========================= */
+
+    if (
+        !response.ok ||
+        !result.success ||
+        !result.user
+    ) {
+
+        toast(
+            result.message ||
+            "Verification failed.",
+            "error"
+        );
+
+        return;
+    }
+
+
+    /* =========================
+       VERIFICATION SUCCESSFUL
+       ========================= */
+
+    const user = {
+
+        id: String(result.user.id),
+
+        firstName:
+            result.user.first_name,
+
+        middleName:
+            result.user.middle_name || "",
+
+        lastName:
+            result.user.last_name,
+
+        name: [
+            result.user.first_name,
+            result.user.middle_name,
+            result.user.last_name
+        ]
+            .filter(Boolean)
+            .join(" "),
+
+        studentId:
+            result.user.student_id,
+
+        email:
+            result.user.email,
+
+        course:
+            result.user.course,
+
+        campus:
+            result.user.campus,
+
+        role:
+            result.user.role,
+
+        profilePhoto:
+            result.user.profile_photo || ""
+
+    };
+
+
+    /* =========================
+       SAVE USER LOCALLY
+       ========================= */
+
+    const users =
+        getUsers()
+            .filter(
+                account =>
+                    account.id !== user.id
+            );
+
+    users.push(user);
+
+    saveUsers(users);
+
+
+    /* =========================
+       NOW LOG THEM IN
+       ========================= */
+
+    localStorage.setItem(
+        STORAGE.session,
+        user.id
+    );
+
+
+    toast(
+        `Welcome to ReSource, ${getUserFirstName(user)}!`
+    );
+
+
+    /* =========================
+       CLEAN UP
+       ========================= */
+
+    $("#signup-verification-form")
+        .reset();
+
+    $("#signup-verification-box")
+        .classList.add("hidden");
+
+
+    renderAll();
+
+
+    /* =========================
+       GO TO DASHBOARD
+       ========================= */
+
+    goToPage("dashboard");
+
+});
+
+$("#delete-account-btn").addEventListener("click", async () => {
+
+    const confirmed = confirm(
+        "Are you sure you want to permanently delete your ReSource account?\n\n" +
+        "This action cannot be undone."
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    const confirmation = prompt(
+        'Type DELETE to confirm account deletion.'
+    );
+
+    if (confirmation !== "DELETE") {
+
+        toast(
+            "Account deletion cancelled.",
+            "error"
+        );
+
+        return;
+    }
+
+    let response;
+    let result;
+
+    try {
+
+        response = await fetch(
+            "../backend/php/auth/delete-account.php",
+            {
+                method: "POST"
+            }
+        );
+
+        result = await response.json();
+
+    } catch (error) {
+
+        toast(
+            "The server is unavailable. Please try again.",
+            "error"
+        );
+
+        return;
+    }
+
+    if (!response.ok || !result.success) {
+
+        toast(
+            result.message ||
+            "Unable to delete account.",
+            "error"
+        );
+
+        return;
+    }
+
+    /*
+     * Remove the deleted account
+     * from the browser's stored users.
+     */
+
+    const currentSession =
+        localStorage.getItem(STORAGE.session);
+
+    if (currentSession) {
+
+        const users =
+            getUsers().filter(
+                user => user.id !== currentSession
+            );
+
+        saveUsers(users);
+    }
+
+    localStorage.removeItem(STORAGE.session);
+
+    toast(
+        "Your account has been deleted."
+    );
+
+    renderAll();
+
+    goToPage("login");
+
+});
